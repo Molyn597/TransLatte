@@ -2,6 +2,31 @@ import { languageName } from '../shared/languages';
 
 export type DateOrder = 'MDY' | 'DMY';
 
+const CZECH_MONTHS: [string, string][] = [
+  ['červenec', 'července'],
+  ['červen', 'června'],
+  ['leden', 'ledna'],
+  ['únor', 'února'],
+  ['březen', 'března'],
+  ['duben', 'dubna'],
+  ['květen', 'května'],
+  ['srpen', 'srpna'],
+  ['říjen', 'října'],
+  ['listopad', 'listopadu'],
+  ['prosinec', 'prosince'],
+];
+
+/** „6. KVĚTEN 2019“ → „6. KVĚTNA 2019“: za číslem dne musí být měsíc ve 2. pádě (zachová velká písmena). */
+export function fixCzechMonths(text: string) {
+  const names = CZECH_MONTHS.map(([n]) => n).join('|');
+  return text.replace(new RegExp(`(\\d{1,2}\\.\\s*)(${names})(?!\\p{L})`, 'giu'), (_m, day: string, month: string) => {
+    const genitive = CZECH_MONTHS.find(([n]) => n === month.toLowerCase())![1];
+    if (month === month.toUpperCase()) return day + genitive.toUpperCase();
+    if (month[0] === month[0].toUpperCase()) return day + genitive[0].toUpperCase() + genitive.slice(1);
+    return day + genitive;
+  });
+}
+
 // Datum se čtyřmístným rokem; číslo verze ani desetinné číslo tomu neodpovídá.
 const NUMERIC = /(?<![\d.\/-])(\d{1,2})([-/.])(\d{1,2})\2(\d{4})(?![\d\/-]|\.\d)/g;
 const ISO = /(?<![\d.\/-])(\d{4})-(\d{2})-(\d{2})(?![\d\/-]|\.\d)/g;

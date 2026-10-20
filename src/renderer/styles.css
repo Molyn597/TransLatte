@@ -565,6 +565,14 @@ input:focus {
   gap: 8px;
 }
 
+.pages-field input {
+  width: 120px;
+}
+
+.pages-field input.invalid {
+  outline: 2px solid var(--danger);
+}
+
 .lang-arrow {
   width: 18px;
   height: 18px;

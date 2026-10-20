@@ -194,7 +194,7 @@ function infoView(detail: JobDetail) {
   row('Jazyky', langPair(job));
   row('Vytvořeno', date(job.createdAt));
   if (jobDuration(job)) row('Doba zpracování', jobDuration(job));
-  if (job.pages) row('Stránek', String(job.pages));
+  if (job.pages) row('Stránek', job.pageRange ? `${job.pages} (výběr ${job.pageRange})` : String(job.pages));
   if (job.chars) row('Znaků originálu', job.chars.toLocaleString('cs-CZ'));
   row('Odstavců', String(segments.length));
   if (job.output) row('Výstup', job.output);

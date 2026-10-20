@@ -5,8 +5,10 @@ import {
   groupSegments,
   layoutToBlocks,
   markdownToBlocks,
+  dropDuplicateBlocks,
   dropRepeatedBlocks,
   mergeAcrossPages,
+  mergeBrokenHeadings,
   normalizeMarkdownTable,
   parseOcr,
   removePageFurniture,
@@ -226,5 +228,41 @@ describe('sentenceChunks', () => {
 
   it('zkratky uprostřed věty (e.g. 3.5) nerozdělí', () => {
     expect(sentenceChunks('Values rose by 3.5 percent in total.', 10)).toEqual(['Values rose by 3.5 percent in total.']);
+  });
+});
+
+describe('zvýrazněné citáty', () => {
+  const quote = 'Good teams need honest conversations every single week';
+
+  it('pokračování nadpisu malým písmenem se spojí i při větším řádkování', () => {
+    const blocks = layoutToBlocks(
+      [
+        item('Good teams need honest', 50, 100, 300, 20),
+        item('conversations every single week', 50, 150, 300, 20),
+        ...[0, 1, 2, 3].map((i) => item(`Body line ${i}`, 50, 200 + i * 12)),
+      ],
+      600,
+      1,
+    );
+    expect(blocks[0]).toMatchObject({ kind: 'heading', text: 'Good teams need honest conversations every single week' });
+  });
+
+  it('rozdělený nadpis z OCR spojí jen na stejné stránce', () => {
+    const merged = mergeBrokenHeadings([
+      { kind: 'heading', text: 'Good teams need honest', page: 2 },
+      { kind: 'heading', text: 'conversations every single week', page: 2 },
+      { kind: 'heading', text: 'Results', page: 2 },
+    ]);
+    expect(merged.map((b) => b.text)).toEqual([quote, 'Results']);
+  });
+
+  it('citát, který opakuje větu z článku, zahodí; odstavec nechá', () => {
+    const blocks = dropDuplicateBlocks([
+      { kind: 'heading', text: quote },
+      { kind: 'paragraph', text: `We found that ${quote.toLowerCase()} -- and managers agree.` },
+      { kind: 'heading', text: 'Results' },
+      { kind: 'paragraph', text: 'Results were clear.' },
+    ]);
+    expect(blocks.map((b) => b.kind + ':' + b.text.slice(0, 13))).toEqual(['paragraph:We found that', 'heading:Results', 'paragraph:Results were ']);
   });
 });

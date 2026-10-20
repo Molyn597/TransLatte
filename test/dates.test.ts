@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { documentOrder, rewriteDates } from '../src/main/dates';
+import { documentOrder, fixCzechMonths, rewriteDates } from '../src/main/dates';
 
 describe('rewriteDates', () => {
   it('nejednoznačné datum v angličtině čte americky (měsíc/den) a upozorní na to', () => {
@@ -46,5 +46,17 @@ describe('documentOrder', () => {
 
   it('bez jednoznačného data nerozhodne', () => {
     expect(documentOrder(['Start 03/10/2014'])).toBeUndefined();
+  });
+});
+
+describe('fixCzechMonths', () => {
+  it('opraví 1. pád měsíce za číslem dne a zachová velikost písmen', () => {
+    expect(fixCzechMonths('6. KVĚTEN 2019')).toBe('6. KVĚTNA 2019');
+    expect(fixCzechMonths('Dne 1. červenec a 2. červen')).toBe('Dne 1. července a 2. června');
+    expect(fixCzechMonths('3. Listopad')).toBe('3. Listopadu');
+  });
+
+  it('správné tvary a samotné měsíce nechá být', () => {
+    expect(fixCzechMonths('6. května, v květen se nic nemění, 7. listopadu')).toBe('6. května, v květen se nic nemění, 7. listopadu');
   });
 });

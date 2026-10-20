@@ -4,7 +4,8 @@ import mammoth from 'mammoth';
 import { detect } from 'tinyld';
 import { isSupported } from '../shared/languages';
 import type { GlossaryEntry, Job, Progress, Rates, Segment, Settings, Stage } from '../shared/types';
-import { documentOrder, rewriteDates, type DateOrder } from './dates';
+import { selectPages } from '../shared/pages';
+import { documentOrder, fixCzechMonths, rewriteDates, type DateOrder } from './dates';
 import { buildDocx } from './docx';
 import { chat, complete, ensureModel, ensureServer, isVisionModel } from './lmstudio';
 import { closePdf, openPdf, pageText, renderPage } from './pdf';
@@ -20,12 +21,14 @@ import {
 import { glossaryMisses, hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
 import {
   blocksToSegments,
+  dropDuplicateBlocks,
   dropRepeatedBlocks,
   finalText,
   groupSegments,
   layoutToBlocks,
   markdownToBlocks,
   mergeAcrossPages,
+  mergeBrokenHeadings,
   normalizeMarkdownTable,
   parseOcr,
   removePageFurniture,
@@ -198,20 +201,20 @@ async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
 async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segment[]> {
   const { job, settings } = ctx;
   const docId = job.id;
-  const { pages } = await openPdf(docId, new Uint8Array(await readFile(file)));
-  job.pages = pages;
+  const { pages: total } = await openPdf(docId, new Uint8Array(await readFile(file)));
   try {
+    const selected = selectPages(job.pageRange, total);
+    job.pages = selected.length;
     const texts = [];
-    for (let p = 1; p <= pages; p++) texts.push(await pageText(docId, p));
+    for (const p of selected) texts.push(await pageText(docId, p));
     const content = removePageFurniture(texts);
     const layouts = texts.map(({ items, width }, i) => ({
-      blocks: layoutToBlocks(content[i], width, i + 1),
+      page: selected[i],
+      blocks: layoutToBlocks(content[i], width, selected[i]),
       scanned: items.reduce((n, it) => n + it.str.trim().length, 0) < SCAN_TEXT_CHARS,
     }));
     // Rychlý režim čte digitální stránky z textové vrstvy, OCR jen u skenů.
-    const ocrPages = layouts
-      .map((l, i) => i + 1)
-      .filter((p) => job.mode !== 'fast' || layouts[p - 1].scanned);
+    const ocrPages = layouts.filter((l) => job.mode !== 'fast' || l.scanned).map((l) => l.page);
     eta.setPlan({ ocrPages: ocrPages.length, chars: layouts.reduce((n, l) => n + blocksText(l.blocks).length, 0) });
     ctx.ocrCount = ocrPages.length;
     if (ocrPages.length) await ensureModel(settings.models.ocr, ID.ocr);
@@ -219,9 +222,9 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
     const blocks: Block[] = [];
     const warnings = new Map<number, string>();
     let done = 0;
-    for (let p = 1; p <= pages; p++) {
+    for (const layout of layouts) {
       check(ctx.signal);
-      const layout = layouts[p - 1];
+      const p = layout.page;
       if (!ocrPages.includes(p)) {
         blocks.push(...layout.blocks);
         continue;
@@ -254,7 +257,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       done++;
     }
     await repairTables(ctx, docId, blocks);
-    const segments = blocksToSegments(mergeAcrossPages(dropRepeatedBlocks(blocks)));
+    const segments = blocksToSegments(dropDuplicateBlocks(mergeBrokenHeadings(mergeAcrossPages(dropRepeatedBlocks(blocks)))));
     for (const s of segments) if (s.page && warnings.has(s.page)) s.warning ??= warnings.get(s.page);
     return segments;
   } finally {
@@ -504,6 +507,13 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
       measured.polishPerKChar = (Date.now() - t) / job.chars;
     }
     await enforceGlossary(ctx, segments);
+  }
+
+  if (job.targetLang === 'cs') {
+    for (const s of segments) {
+      if (s.translation) s.translation = fixCzechMonths(s.translation);
+      if (s.polished) s.polished = fixCzechMonths(s.polished);
+    }
   }
 
   ctx.progress({ stage: 'write', done: 0, total: 0 });

@@ -178,9 +178,13 @@ function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap }: Met
     const prev = lines[i - 1];
     const gap = i ? line.y - prev.y : Infinity;
     const isList = LIST_LINE.test(line.text);
-    // Dvouřádkový nadpis (stejné písmo, těsně pod sebou) zůstane jedním nadpisem.
+    // Dvouřádkový nadpis (stejné písmo, těsně pod sebou) zůstane jedním nadpisem; zvýrazněný citát
+    // mívá větší řádkování, ale pokračování začíná malým písmenem.
     const headingContinues =
-      isHeading && current?.kind === 'heading' && Math.abs(prev.h - line.h) < 0.5 && gap < line.h * 1.6;
+      isHeading &&
+      current?.kind === 'heading' &&
+      Math.abs(prev.h - line.h) < 0.5 &&
+      (gap < line.h * 1.6 || (/^\p{Ll}/u.test(line.text) && gap < line.h * 3));
     const startsNew =
       !headingContinues &&
       (!current || isHeading || current.kind === 'heading' || gap > lineGap * 1.5 || (isList && current.kind !== 'list'));
@@ -285,6 +289,39 @@ export function mergeAcrossPages(blocks: Block[]): Block[] {
     out.push({ ...b });
   }
   return out;
+}
+
+/** Nadpis rozdělený na dva bloky (pokračování začíná malým písmenem) se spojí, typicky citát z OCR. */
+export function mergeBrokenHeadings(blocks: Block[]): Block[] {
+  const out: Block[] = [];
+  for (const b of blocks) {
+    const prev = out[out.length - 1];
+    if (prev?.kind === 'heading' && b.kind === 'heading' && prev.page === b.page && /^\p{Ll}/u.test(b.text)) {
+      prev.text = `${prev.text} ${b.text}`;
+      continue;
+    }
+    out.push({ ...b });
+  }
+  return out;
+}
+
+const normalized = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(' ');
+
+/**
+ * Zvýrazněný citát opakuje větu z článku; překládal by se dvakrát a bez kontextu.
+ * Blok, jehož text je celý obsažený v jiném bloku, se zahodí (u shody zůstane odstavec, ne nadpis).
+ */
+export function dropDuplicateBlocks(blocks: Block[]): Block[] {
+  const norms = blocks.map((b) => normalized(b.text));
+  return blocks.filter((b, i) => {
+    if (norms[i].length < 40 || b.kind === 'table') return true;
+    return !norms.some((other, j) => {
+      if (j === i || !other.includes(norms[i])) return false;
+      if (other.length > norms[i].length) return true;
+      // Stejný text: zahodit nadpis před odstavcem, u stejného druhu pozdější výskyt.
+      return blocks[j].kind === b.kind ? j < i : b.kind === 'heading';
+    });
+  });
 }
 
 /** TranslateGemma přidává tečku i za nadpis nebo položku bez tečky. */

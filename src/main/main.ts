@@ -14,7 +14,7 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron';
 import { languageName } from '../shared/languages';
-import type { GlossaryEntry, Job, Mode, Settings, Stage } from '../shared/types';
+import type { GlossaryEntry, Job, JobOptions, Mode, Settings, Stage } from '../shared/types';
 import { status } from './lmstudio';
 import { Queue, SUPPORTED } from './queue';
 import { Store } from './store';
@@ -188,7 +188,7 @@ function registerIpc() {
     });
     return res.canceled ? [] : res.filePaths;
   });
-  ipcMain.handle('jobs-add', async (_e, paths: string[], options: { mode: Mode; sourceLang: string; targetLang: string }) => {
+  ipcMain.handle('jobs-add', async (_e, paths: string[], options: JobOptions) => {
     const errors: string[] = [];
     for (const p of paths) {
       try {

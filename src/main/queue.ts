@@ -1,7 +1,7 @@
 import { copyFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import type { Job, Mode, Rates } from '../shared/types';
+import type { Job, JobOptions, Mode, Rates } from '../shared/types';
 import { unloadAll } from './lmstudio';
 import { runJob, type Measured } from './pipeline';
 import type { Store } from './store';
@@ -50,7 +50,7 @@ export class Queue {
     }
   }
 
-  async add(file: string, options: { mode: Mode; sourceLang: string; targetLang: string }) {
+  async add(file: string, options: JobOptions) {
     const ext = path.extname(file).toLowerCase();
     if (!SUPPORTED.includes(ext)) throw new Error(`Formát ${ext || 'bez přípony'} není podporovaný.`);
     const job: Job = {
@@ -58,6 +58,7 @@ export class Queue {
       name: path.basename(file, path.extname(file)),
       ext,
       ...options,
+      pageRange: options.pageRange?.trim() || undefined,
       status: 'queued',
       createdAt: Date.now(),
       warnings: 0,

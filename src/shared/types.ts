@@ -34,6 +34,8 @@ export interface Job {
   sourceLang: string;
   targetLang: string;
   status: JobStatus;
+  /** Vybrané stránky PDF, např. „1-8“; prázdné = všechny. */
+  pageRange?: string;
   createdAt: number;
   startedAt?: number;
   finishedAt?: number;
@@ -46,6 +48,13 @@ export interface Job {
   output?: string;
   /** Doba jednotlivých fází v sekundách. */
   timings?: Partial<Record<Stage, number>>;
+}
+
+export interface JobOptions {
+  mode: Mode;
+  sourceLang: string;
+  targetLang: string;
+  pageRange?: string;
 }
 
 export interface GlossaryEntry {
@@ -99,7 +108,7 @@ export interface Api {
   lmStatus(): Promise<LmStatus>;
   pickFiles(): Promise<string[]>;
   pathForFile(file: File): string;
-  addJobs(paths: string[], options: { mode: Mode; sourceLang: string; targetLang: string }): Promise<void>;
+  addJobs(paths: string[], options: JobOptions): Promise<void>;
   listJobs(): Promise<Job[]>;
   getJob(id: string): Promise<JobDetail | null>;
   readInput(id: string): Promise<Uint8Array | null>;

@@ -1,4 +1,5 @@
 import { LANGUAGES } from '../shared/languages';
+import { isValidPageRange } from '../shared/pages';
 import type { Api, Job, Mode, Models, Settings } from '../shared/types';
 import { closeDetail, detailJobId, openDetail, setupDetail, updateDetail } from './detail';
 import {
@@ -135,8 +136,18 @@ function fillLanguages() {
 
 async function addFiles(paths: string[]) {
   if (!paths.length) return;
+  const pageRange = $<HTMLInputElement>('page-range').value;
+  if (!isValidPageRange(pageRange)) {
+    toast('Neplatný rozsah stránek. Použij např. 1-8 nebo 1-3, 5.', true);
+    return;
+  }
   try {
-    await window.api.addJobs(paths, { mode: settings.mode, sourceLang: settings.sourceLang, targetLang: settings.targetLang });
+    await window.api.addJobs(paths, {
+      mode: settings.mode,
+      sourceLang: settings.sourceLang,
+      targetLang: settings.targetLang,
+      pageRange,
+    });
     toast(paths.length === 1 ? 'Přidáno do fronty' : `Přidáno do fronty: ${paths.length} souborů`);
   } catch (e) {
     toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true);
@@ -260,6 +271,8 @@ async function init() {
   renderModes();
   renderHome();
   $('history-search').addEventListener('input', renderHistory);
+  const pageRange = $<HTMLInputElement>('page-range');
+  pageRange.addEventListener('input', () => pageRange.classList.toggle('invalid', !isValidPageRange(pageRange.value)));
   $('lm-refresh').addEventListener('click', () => void refreshStatus());
 
   window.api.onJobUpdate((job) => {
