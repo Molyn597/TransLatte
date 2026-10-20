@@ -1,0 +1,7 @@
+SET UTF-8
+TRY aeiouyáéíěóúůýčďňřšťžbcdfghjklmnpqrstvwxz
+
+SFX A Y 3
+SFX A a ové a
+SFX A a ům a
+SFX A a y a
