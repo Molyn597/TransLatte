@@ -44,9 +44,9 @@ export const ICONS = {
 };
 
 export const MODES: Record<Mode, { title: string; desc: string }> = {
-  fast: { title: 'Rychlý', desc: 'Text z PDF, OCR jen u skenů. Bez uhlazení.' },
-  balanced: { title: 'Vyvážený', desc: 'OCR všech stránek s kontrolou. Bez uhlazení.' },
-  quality: { title: 'Kvalitní', desc: 'OCR s kontrolou, překlad a uhlazení textu.' },
+  fast: { title: 'Rychlý', desc: 'Text z PDF, OCR jen u skenů. Chyby jen označí.' },
+  balanced: { title: 'Vyvážený', desc: 'OCR všech stránek, kontrola a oprava chyb.' },
+  quality: { title: 'Kvalitní', desc: 'Navíc kontext dokumentu (téma, autor) pro přesnější opravy.' },
 };
 
 export const STAGES: Record<Stage, string> = {
@@ -54,9 +54,10 @@ export const STAGES: Record<Stage, string> = {
   extract: 'Čtu dokument',
   ocr: 'Čtu stránky (OCR)',
   tables: 'Čtu tabulky',
+  context: 'Čtu kontext dokumentu',
   translate: 'Překládám',
-  polish: 'Uhlazuji text',
-  glossary: 'Kontroluji glosář',
+  check: 'Kontroluji překlad',
+  fix: 'Opravuji chyby',
   write: 'Ukládám výsledek',
 };
 

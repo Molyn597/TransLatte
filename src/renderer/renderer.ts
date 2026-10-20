@@ -28,9 +28,11 @@ declare global {
 type View = 'home' | 'history' | 'detail' | 'glossary' | 'settings';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const ROLE_NAMES: Record<keyof Models, string> = { ocr: 'OCR', translate: 'Překlad', polish: 'Uhlazení' };
-// Průměrná stránka článku má kolem 3000 znaků.
+const ROLE_NAMES: Record<keyof Models, string> = { ocr: 'OCR', translate: 'Překlad', polish: 'Opravy' };
+// Průměrná stránka článku má kolem 3000 znaků a 8 odstavců; opravu potřebuje zhruba 15 % z nich.
 const CHARS_PER_PAGE = 3000;
+const FIXES_PER_PAGE = 8 * 0.15;
+const CONTEXT_SECONDS = 10;
 
 let settings: Settings;
 let jobs = new Map<string, Job>();
@@ -88,7 +90,9 @@ function modeTime(mode: Mode) {
   const r = settings.rates;
   const k = CHARS_PER_PAGE / 1000;
   const seconds =
-    k * r.translatePerKChar + (mode === 'fast' ? 0 : r.ocrPerPage) + (mode === 'quality' ? k * r.polishPerKChar : 0);
+    k * r.translatePerKChar +
+    (mode === 'fast' ? 0 : r.ocrPerPage + FIXES_PER_PAGE * r.fixPerSegment) +
+    (mode === 'quality' ? CONTEXT_SECONDS : 0);
   return `≈ ${duration(seconds)} na stránku`;
 }
 

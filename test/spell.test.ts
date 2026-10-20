@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createChecker, ensureDictionary, misspelledWords, unpackTgz } from '../src/main/spell';
+import { spellWorkerPath } from '../src/main/spell-client';
+import { createChecker, ensureDictionary, misspelledWords, spellBatch, unpackTgz } from '../src/main/spell';
 
 const fixture = (name: string) => readFileSync(join(__dirname, 'fixtures/spell', name));
 const checker = createChecker(fixture('mini.aff'), fixture('mini.dic'));
@@ -119,5 +120,34 @@ describe('misspelledWords', () => {
     expect(misspelledWords(checker, 'česko-slovenský česko-slovesnký spolupráce slovesnký Slovesnký', '')).toEqual([
       'slovesnký',
     ]);
+  });
+});
+
+describe('spellBatch', () => {
+  it('vrátí chybná slova pro každou položku dávky ve stejném pořadí', () => {
+    expect(
+      spellBatch(checker, [
+        { translation: 'Sdělidli jsme kolegům.', source: '' },
+        { translation: 'Jsme kolegové.', source: '' },
+        { translation: 'Gallup povýbeních', source: 'Gallup' },
+      ]),
+    ).toEqual([['Sdělidli'], [], ['povýbeních']]);
+  });
+});
+
+describe('spellWorkerPath', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'translatte-asar-'));
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+
+  it('v zabalené aplikaci vede do app.asar.unpacked, jinak zůstane cesta beze změny', async () => {
+    const packed = join(dir, 'app.asar', 'dist');
+    expect(spellWorkerPath(packed)).toBe(join(packed, 'spell-worker.js'));
+    await mkdir(join(dir, 'app.asar.unpacked', 'dist'), { recursive: true });
+    await writeFile(join(dir, 'app.asar.unpacked', 'dist', 'spell-worker.js'), '');
+    expect(spellWorkerPath(packed)).toBe(join(dir, 'app.asar.unpacked', 'dist', 'spell-worker.js'));
+    expect(spellWorkerPath(join(dir, 'dist'))).toBe(join(dir, 'dist', 'spell-worker.js'));
   });
 });

@@ -3,22 +3,35 @@ import path from 'node:path';
 import mammoth from 'mammoth';
 import { detect } from 'tinyld';
 import { isSupported } from '../shared/languages';
-import type { GlossaryEntry, Job, Progress, Rates, Segment, Settings, Stage } from '../shared/types';
+import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, Segment, Settings, Stage } from '../shared/types';
 import { selectPages } from '../shared/pages';
-import { documentOrder, fixCzechMonths, rewriteDates, type DateOrder } from './dates';
+import { documentOrder, rewriteDates, type DateOrder } from './dates';
 import { buildDocx } from './docx';
 import { chat, complete, ensureModel, ensureServer, isVisionModel } from './lmstudio';
 import { closePdf, openPdf, pageText, renderPage } from './pdf';
 import {
   OCR_PROMPT,
   TABLE_PROMPT,
+  contextPrompt,
+  fixSystem,
+  fixUser,
   isTranslateGemma,
-  polishSystem,
-  polishUser,
   translateGemmaPrompt,
   translateSystem,
 } from './prompts';
-import { glossaryMisses, hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
+import { hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
+import {
+  acceptFix,
+  applyDeterministic,
+  findIssues,
+  fixCzech,
+  parseContext,
+  reviewGlossary,
+  type Issue,
+  type ReviewOptions,
+} from './review';
+import { ensureDictionary } from './spell';
+import { SpellWorker, spellWorkerPath } from './spell-client';
 import {
   blocksToSegments,
   dropDuplicateBlocks,
@@ -46,6 +59,11 @@ const PARALLEL = 4;
 const SCAN_TEXT_CHARS = 50;
 const OCR_MATCH = 0.85;
 const ID = { ocr: 'translatte-ocr', translate: 'translatte-translate', polish: 'translatte-polish' };
+const CONTEXT_CHARS = 6000;
+const CONTEXT_SECONDS = 10;
+// Odhad před kontrolou: opravu potřebuje zhruba každý sedmý segment.
+const FIX_SHARE = 0.15;
+const SPELL_BATCH = 40;
 
 export const outputName = (job: Job) => `${job.name} (${job.targetLang.toUpperCase()}).docx`;
 
@@ -64,7 +82,15 @@ export interface JobContext {
 export interface Measured {
   ocrPerPage?: number;
   translatePerKChar?: number;
-  polishPerKChar?: number;
+  fixPerSegment?: number;
+}
+
+interface Plan {
+  ocrPages: number;
+  chars: number;
+  context: boolean;
+  /** Počet segmentů k opravě (před kontrolou odhad). */
+  fixes: number;
 }
 
 class Eta {
@@ -73,18 +99,19 @@ class Eta {
 
   constructor(
     private rates: Rates,
-    private plan: { ocrPages: number; chars: number; polish: boolean },
+    private plan: Plan,
   ) {}
 
-  setPlan(plan: Partial<{ ocrPages: number; chars: number; polish: boolean }>) {
+  setPlan(plan: Partial<Plan>) {
     Object.assign(this.plan, plan);
   }
 
   private estimate(stage: Stage) {
     const k = this.plan.chars / 1000;
     if (stage === 'ocr') return this.plan.ocrPages * this.rates.ocrPerPage;
+    if (stage === 'context') return this.plan.context ? CONTEXT_SECONDS : 0;
     if (stage === 'translate') return k * this.rates.translatePerKChar;
-    if (stage === 'polish') return this.plan.polish ? k * this.rates.polishPerKChar : 0;
+    if (stage === 'fix') return this.plan.fixes * this.rates.fixPerSegment;
     return 0;
   }
 
@@ -94,7 +121,7 @@ class Eta {
       this.stage = stage;
       this.stageStart = Date.now();
     }
-    const order: Stage[] = ['ocr', 'translate', 'polish'];
+    const order: Stage[] = ['ocr', 'context', 'translate', 'check', 'fix'];
     const elapsed = (Date.now() - this.stageStart) / 1000;
     const current =
       done > 0 && total > 0 ? (elapsed / done) * (total - done) : this.estimate(stage) * (total ? 1 - done / total : 1);
@@ -167,7 +194,7 @@ const blocksText = (blocks: Block[]) => blocks.map((b) => b.text).join('\n');
 
 const TABLE_FALLBACK = 'Tabulku se nepodařilo přečíst po buňkách, je převedená na text. Zkontroluj ji proti originálu.';
 
-/** Tabulky bez buněk přečte znovu vision model pro uhlazení z výřezu stránky. */
+/** Tabulky bez buněk přečte znovu vision model pro opravy z výřezu stránky. */
 async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
   const broken = blocks.filter((b) => b.needsRepair);
   if (!broken.length) return;
@@ -330,10 +357,9 @@ const looksWrong = (source: string, out: string) => !out || suspiciousLength(sou
 interface Unit {
   seg: Segment;
   source: string;
-  /** Zdroj s daty přepsanými na jednoznačný tvar; tohle dostane překladač i redaktor. */
+  /** Zdroj s daty přepsanými na jednoznačný tvar; tohle dostane překladač. */
   prepared: string;
   translation?: string;
-  polished?: string;
 }
 
 const LONG_PARAGRAPH = 900;
@@ -368,7 +394,7 @@ const joinUnits = (units: Unit[], seg: Segment, pick: (u: Unit) => string) =>
     .map(pick)
     .join(' ');
 
-async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta): Promise<Unit[]> {
+async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
   // Pořadí den/měsíc platí pro celý dokument („25/12/2014“ jinde rozhodne i „03/10/2014“).
   const order = documentOrder(segments.map((s) => s.source));
   const units = toUnits(ctx, segments, order);
@@ -407,64 +433,130 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta): Pro
   for (const seg of segments) {
     if (seg.kind !== 'table') seg.translation = stripAddedPeriod(seg.source, joinUnits(units, seg, (u) => u.translation ?? ''));
   }
-  return units;
 }
 
-async function polishText(ctx: JobContext, source: string, translation: string, glossary: GlossaryEntry[]) {
+// ---------- Kontext, kontrola a oprava ----------
+
+const addJobNote = (job: Job, note: string) => (job.notes ??= []).push(note);
+
+/** Téma, autor a termíny z úvodu dokumentu (Gemma); při chybě se pokračuje bez kontextu. */
+async function readContext(ctx: JobContext, segments: Segment[], eta: Eta): Promise<DocumentContext | undefined> {
   const { settings, job } = ctx;
-  return chat(
-    settings.apiUrl,
-    ID.polish,
-    [
-      { role: 'system', content: polishSystem(job.targetLang, glossary) },
-      { role: 'user', content: polishUser(source, translation, job.targetLang) },
-    ],
-    { maxTokens: Math.min(4000, Math.ceil(translation.length / 1.5) + 200), signal: ctx.signal },
-  );
+  ctx.progress({ stage: 'context', done: 0, total: 0, eta: eta.remaining('context', 0, 0) });
+  const sample = segments
+    .filter((s) => s.kind !== 'table')
+    .map((s) => s.source)
+    .join('\n\n')
+    .slice(0, CONTEXT_CHARS);
+  await ensureModel(settings.models.polish, ID.polish);
+  let context: DocumentContext | undefined;
+  try {
+    const out = await chat(settings.apiUrl, ID.polish, [{ role: 'user', content: contextPrompt(sample, job.targetLang) }], {
+      maxTokens: 1200,
+      signal: ctx.signal,
+    });
+    context = parseContext(out);
+  } catch (err) {
+    if (ctx.signal.aborted) throw err;
+  }
+  if (!context) addJobNote(job, 'Kontext dokumentu se nepodařilo zjistit, opravy proběhly bez něj.');
+  return context;
 }
 
-// Redaktor nesmí odstavec zkrátit ani rozepsat; jinak zůstane původní překlad.
-const polishOk = (translation: string, polished: string) =>
-  Boolean(polished) && polished.length / Math.max(translation.length, 1) > 0.6 && polished.length / Math.max(translation.length, 1) < 1.6;
-
-async function polishAll(ctx: JobContext, segments: Segment[], units: Unit[], eta: Eta) {
-  const groups = unitGroups(units);
-  const total = units.reduce((n, u) => n + u.source.length, 0);
-  let done = 0;
-  await ensureModel(ctx.settings.models.polish, ID.polish);
-  ctx.progress({ stage: 'polish', done, total, eta: eta.remaining('polish', done, total) });
-  await eachParallel(groups, PARALLEL, async (items) => {
+/** Kontrola pravopisu ve workeru; bez slovníku (offline) se přeskočí s poznámkou u úlohy. */
+async function startSpeller(ctx: JobContext): Promise<SpellWorker | undefined> {
+  try {
+    const dictionary = await ensureDictionary(path.join(ctx.store.root, 'dictionaries'), ctx.signal);
     check(ctx.signal);
-    const source = items.map((u) => u.prepared).join('\n\n');
-    const translation = items.map((u) => u.translation ?? '').join('\n\n');
-    const parts = splitBatch(await polishText(ctx, source, translation, relevantGlossary(source, ctx.glossary)), items.length);
-    for (const [i, u] of items.entries()) {
-      let polished = parts?.[i];
-      if (!polished) polished = await polishText(ctx, u.prepared, u.translation ?? '', relevantGlossary(u.prepared, ctx.glossary));
-      u.polished = polishOk(u.translation ?? '', polished) ? polished : u.translation;
-    }
-    done += items.reduce((n, u) => n + u.source.length, 0);
-    ctx.progress({ stage: 'polish', done, total, eta: eta.remaining('polish', done, total) });
-  });
-  for (const seg of segments) {
-    if (seg.kind !== 'table') seg.polished = stripAddedPeriod(seg.source, joinUnits(units, seg, (u) => u.polished ?? u.translation ?? ''));
+    return new SpellWorker(spellWorkerPath(__dirname), dictionary);
+  } catch (err) {
+    if (ctx.signal.aborted) throw err;
+    addJobNote(ctx.job, `Kontrola pravopisu se přeskočila: ${(err as Error).message}`);
+    return undefined;
   }
 }
 
-/** Opraví jen odstavce, kde chybí termín z glosáře (TranslateGemma glosář přijmout neumí). */
-async function enforceGlossary(ctx: JobContext, segments: Segment[]) {
-  const todo = segments.filter((s) => s.kind !== 'table' && glossaryMisses(s.source, finalText(s), ctx.glossary).length);
-  if (!todo.length) return;
-  await ensureModel(ctx.settings.models.polish, ID.polish);
-  let done = 0;
-  ctx.progress({ stage: 'glossary', done, total: todo.length });
-  await eachParallel(todo, PARALLEL, async (s) => {
+interface Reviewer {
+  options: ReviewOptions;
+  spell(items: { translation: string; source: string }[]): Promise<string[][]>;
+}
+
+function reviewer(ctx: JobContext, speller: SpellWorker | undefined): Reviewer {
+  const { job } = ctx;
+  let working = speller;
+  return {
+    options: { sourceLang: job.sourceLang, targetLang: job.targetLang, mode: job.mode, glossary: ctx.glossary, context: job.context },
+    async spell(items) {
+      if (!working) return items.map(() => []);
+      try {
+        return await working.check(items);
+      } catch (err) {
+        if (ctx.signal.aborted) throw err;
+        // Spadlý worker (např. nedostatek paměti) úlohu nezastaví, jen se dál nekontroluje pravopis.
+        working = undefined;
+        addJobNote(job, `Kontrola pravopisu se přerušila: ${(err as Error).message}`);
+        return items.map(() => []);
+      }
+    },
+  };
+}
+
+async function checkAll(ctx: JobContext, segments: Segment[], r: Reviewer, eta: Eta) {
+  const todo = segments.filter((s) => s.kind !== 'table');
+  const issues = new Map<Segment, Issue[]>();
+  const report = (done: number) => ctx.progress({ stage: 'check', done, total: todo.length, eta: eta.remaining('check', done, todo.length) });
+  report(0);
+  for (let i = 0; i < todo.length; i += SPELL_BATCH) {
     check(ctx.signal);
-    const fixed = await polishText(ctx, s.source, finalText(s), relevantGlossary(s.source, ctx.glossary));
-    if (polishOk(finalText(s), fixed)) s.polished = stripAddedPeriod(s.source, fixed);
-    const still = glossaryMisses(s.source, finalText(s), ctx.glossary);
-    if (still.length) s.warning ??= `Chybí termín z glosáře: ${still.map((g) => `${g.source} → ${g.target}`).join(', ')}`;
-    ctx.progress({ stage: 'glossary', done: ++done, total: todo.length });
+    const batch = todo.slice(i, i + SPELL_BATCH);
+    const misspelled = await r.spell(batch.map((s) => ({ translation: finalText(s), source: s.source })));
+    batch.forEach((s, j) => {
+      const found = findIssues(s, finalText(s), misspelled[j], r.options);
+      if (found.length) issues.set(s, found);
+    });
+    report(Math.min(i + SPELL_BATCH, todo.length));
+  }
+  return issues;
+}
+
+async function fixSegment(ctx: JobContext, seg: Segment, issues: Issue[], r: Reviewer): Promise<Issue[]> {
+  const { settings, job } = ctx;
+  const before = finalText(seg);
+  const cs = job.targetLang === 'cs';
+  const out = await chat(
+    settings.apiUrl,
+    ID.polish,
+    [
+      { role: 'system', content: fixSystem(job.targetLang, relevantGlossary(seg.source, reviewGlossary(r.options)), job.context) },
+      { role: 'user', content: fixUser(seg.source, before, issues.map((i) => (cs ? i.text : i.en)), job.targetLang) },
+    ],
+    { maxTokens: Math.min(4000, Math.ceil(before.length / 1.5) + 200), signal: ctx.signal },
+  );
+  let after = stripAddedPeriod(seg.source, out);
+  if (cs) after = fixCzech(after);
+  const [misspelled] = await r.spell([{ translation: after, source: seg.source }]);
+  const remaining = findIssues(seg, after, misspelled, r.options);
+  if (!acceptFix(seg.source, before, after, issues, remaining)) return issues;
+  seg.polished = after;
+  return remaining;
+}
+
+async function fixAll(ctx: JobContext, found: Map<Segment, Issue[]>, r: Reviewer, eta: Eta) {
+  const todo = [...found.keys()];
+  let done = 0;
+  const report = () => ctx.progress({ stage: 'fix', done, total: todo.length, eta: eta.remaining('fix', done, todo.length) });
+  await ensureModel(ctx.settings.models.polish, ID.polish);
+  report();
+  await eachParallel(todo, PARALLEL, async (seg) => {
+    check(ctx.signal);
+    try {
+      found.set(seg, await fixSegment(ctx, seg, found.get(seg)!, r));
+    } catch (err) {
+      // Neúspěšná oprava jednoho odstavce nezastaví úlohu; zůstane překlad a upozornění.
+      if (ctx.signal.aborted) throw err;
+    }
+    done++;
+    report();
   });
 }
 
@@ -480,8 +572,8 @@ function detectLanguage(segments: Segment[]) {
 export async function runJob(ctx: JobContext): Promise<Measured> {
   const { job, settings, store } = ctx;
   const measured: Measured = {};
-  const usePolish = job.mode === 'quality';
-  const eta = new Eta(settings.rates, { ocrPages: 0, chars: 0, polish: usePolish });
+  const translating = () => job.sourceLang !== job.targetLang;
+  const eta = new Eta(settings.rates, { ocrPages: 0, chars: 0, context: job.mode === 'quality', fixes: 0 });
 
   ctx.progress({ stage: 'prepare', done: 0, total: 0 });
   await ensureServer(settings.apiUrl);
@@ -492,27 +584,36 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   if (!segments.length) throw new Error('V dokumentu se nenašel žádný text.');
   if (ctx.ocrCount) measured.ocrPerPage = (Date.now() - t) / 1000 / ctx.ocrCount;
   job.chars = segments.reduce((n, s) => n + s.source.length, 0);
-  eta.setPlan({ chars: job.chars });
+  const reviewable = segments.filter((s) => s.kind !== 'table').length;
+  eta.setPlan({ chars: job.chars, fixes: job.mode === 'fast' ? 0 : Math.round(reviewable * FIX_SHARE) });
   if (job.sourceLang === 'auto') job.sourceLang = detectLanguage(segments);
 
-  if (job.sourceLang === job.targetLang) {
+  if (!translating()) {
     for (const s of segments) s.translation = s.source;
   } else {
+    // Kvalitní: Gemma (kontext) → TranslateGemma (překlad) → kontrola bez modelu → Gemma (opravy).
+    if (job.mode === 'quality') job.context = await readContext(ctx, segments, eta);
     t = Date.now();
-    const units = await translateAll(ctx, segments, eta);
+    await translateAll(ctx, segments, eta);
     measured.translatePerKChar = (Date.now() - t) / job.chars;
-    if (usePolish) {
-      t = Date.now();
-      await polishAll(ctx, segments, units, eta);
-      measured.polishPerKChar = (Date.now() - t) / job.chars;
-    }
-    await enforceGlossary(ctx, segments);
   }
+  applyDeterministic(segments, job.targetLang);
 
-  if (job.targetLang === 'cs') {
-    for (const s of segments) {
-      if (s.translation) s.translation = fixCzechMonths(s.translation);
-      if (s.polished) s.polished = fixCzechMonths(s.polished);
+  if (translating()) {
+    const speller = job.targetLang === 'cs' ? await startSpeller(ctx) : undefined;
+    try {
+      const r = reviewer(ctx, speller);
+      const found = await checkAll(ctx, segments, r, eta);
+      if (job.mode !== 'fast' && found.size) {
+        eta.setPlan({ fixes: found.size });
+        t = Date.now();
+        await fixAll(ctx, found, r, eta);
+        measured.fixPerSegment = (Date.now() - t) / 1000 / found.size;
+      }
+      for (const [seg, issues] of found) addNotes(seg, issues.map((i) => i.text));
+    } finally {
+      // Ukončení workeru uvolní ~380 MB slovníku.
+      await speller?.terminate();
     }
   }
 
@@ -525,4 +626,3 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   await writeFile(path.join(dir, job.output.replace(/\.docx$/, '.md')), segmentsToMarkdown(segments));
   return measured;
 }
-

@@ -11,7 +11,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notify: true,
   unloadWhenIdle: true,
   theme: 'system',
-  rates: { ocrPerPage: 7, translatePerKChar: 25, polishPerKChar: 28 },
+  rates: { ocrPerPage: 7, translatePerKChar: 25, fixPerSegment: 8 },
 };
 
 /** Úložiště pod userData: settings.json, glossary.json a jobs/<id>/{job.json, segments.json, vstup, výstup}. */
@@ -38,11 +38,13 @@ export class Store {
 
   async settings(): Promise<Settings> {
     const saved = await this.readJson<Partial<Settings>>(path.join(this.root, 'settings.json'), {});
+    // Starší nastavení mají místo fixPerSegment polishPerKChar; zahodí se.
+    const { ocrPerPage, translatePerKChar, fixPerSegment } = { ...DEFAULT_SETTINGS.rates, ...saved.rates };
     return {
       ...DEFAULT_SETTINGS,
       ...saved,
       models: { ...DEFAULT_SETTINGS.models, ...saved.models },
-      rates: { ...DEFAULT_SETTINGS.rates, ...saved.rates },
+      rates: { ocrPerPage, translatePerKChar, fixPerSegment },
     };
   }
 

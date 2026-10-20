@@ -72,7 +72,7 @@ export function setupGlossary() {
 const ROLES: { key: keyof Models; title: string; hint: string; vision?: boolean }[] = [
   { key: 'ocr', title: 'OCR (čtení stránek)', hint: 'Vision model, doporučený Unlimited-OCR.', vision: true },
   { key: 'translate', title: 'Překlad', hint: 'Doporučená TranslateGemma.' },
-  { key: 'polish', title: 'Uhlazení a glosář', hint: 'Obecný model, doporučená Gemma 4.' },
+  { key: 'polish', title: 'Opravy, kontext a tabulky', hint: 'Obecný model s podporou obrázků, doporučená Gemma 4.' },
 ];
 
 const gb = (bytes: number) => (bytes ? ` · ${(bytes / 1e9).toFixed(1)} GB` : '');
@@ -134,7 +134,7 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
     h(
       'p',
       { class: 'muted small' },
-      `Zpřesňuje se podle tvých překladů. Teď: OCR ${duration(r.ocrPerPage)} na stránku, překlad ${duration(r.translatePerKChar)} a uhlazení ${duration(r.polishPerKChar)} na 1000 znaků.`,
+      `Zpřesňuje se podle tvých překladů. Teď: OCR ${duration(r.ocrPerPage)} na stránku, překlad ${duration(r.translatePerKChar)} na 1000 znaků a oprava ${duration(r.fixPerSegment)} na odstavec.`,
     ),
   );
 

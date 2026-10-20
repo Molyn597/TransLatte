@@ -10,16 +10,22 @@ modely ve tvém [LM Studiu](https://lmstudio.ai) a výsledek uloží jako Word. 
 - **PDF i skeny**: digitální text čte z PDF, skeny přes OCR model. Dvousloupcové články čte po sloupcích.
 - **Word, TXT a Markdown** jako vstup, **.docx** (a .md) jako výstup.
 - **Tři režimy**, rychlost ↔ kvalita:
-  | Režim | OCR | Překlad | Uhlazení |
-  | --- | --- | --- | --- |
-  | Rychlý | jen skeny, jinak text z PDF | TranslateGemma | ne |
-  | Vyvážený | všechny stránky s kontrolou | TranslateGemma | ne |
-  | Kvalitní | všechny stránky s kontrolou | TranslateGemma | Gemma 4 |
+  | Režim | OCR | Překlad | Kontrola | Oprava chyb |
+  | --- | --- | --- | --- | --- |
+  | Rychlý | jen skeny, jinak text z PDF | TranslateGemma | ano | ne, chyby jen označí |
+  | Vyvážený | všechny stránky s kontrolou | TranslateGemma | ano | Gemma 4 |
+  | Kvalitní | všechny stránky s kontrolou | TranslateGemma | ano, navíc rod autora | Gemma 4 s kontextem dokumentu |
 - **Kontrola kvality**: výstup OCR se porovnává s textovou vrstvou PDF. Když nesedí, stránka se čte znovu
-  ve vyšším rozlišení, případně se použije text z PDF. Hlídá se opakování, useknuté odstavce a chybějící
-  termíny z glosáře; podezřelá místa jsou ve srovnání zvýrazněná.
+  ve vyšším rozlišení, případně se použije text z PDF. Překlad se pak kontroluje odstavec po odstavci:
+  pravopis (český slovník Hunspell, stáhne se při prvním použití), nepřeložená anglická slova, chybějící
+  termíny z glosáře, opakování a podezřelá délka. U češtiny se navíc vždy opraví předložky („se zaměstnanci“)
+  a pády měsíců. Vyvážený a Kvalitní režim nechají Gemmu opravit jen nalezené chyby; oprava se přijme,
+  jen když změní nejvýš pár slov na chybu a chyb nepřibude. Co zůstane, je ve srovnání zvýrazněné.
+- **Kontext dokumentu** (Kvalitní): před překladem Gemma přečte začátek dokumentu a zjistí téma, autora
+  a jeho rod. Korektor dostane téma a autora, rod hlídá tvary jako „jsem uvedl / uvedla“. Vynucuje se
+  jen tvůj glosář.
 - **Tabulky**: Unlimited-OCR v LM Studiu ztrácí hranice buněk, proto tabulky přečte znovu vision model
-  pro uhlazení z výřezu stránky.
+  pro opravy z výřezu stránky.
 - **Srovnání vedle sebe** (originál | překlad), náhled originálního PDF, historie s opakováním v jiném režimu.
 - **Glosář** závazných termínů, výběr cílového jazyka, fronta s průběhem a odhadem času, notifikace,
   ikona v liště a průběh v Docku / na hlavním panelu.
@@ -32,12 +38,13 @@ modely ve tvém [LM Studiu](https://lmstudio.ai) a výsledek uloží jako Word. 
    | --- | --- | --- |
    | OCR | Unlimited-OCR (GGUF, Q8) | `unlimited-ocr` |
    | Překlad | TranslateGemma 12B (Q4) | `translategemma-12b-it` |
-   | Uhlazení, tabulky, glosář | Gemma 4 12B QAT (Q4) | `google/gemma-4-12b-qat` |
+   | Opravy, kontext a tabulky | Gemma 4 12B QAT (Q4) | `google/gemma-4-12b-qat` |
 
-   Jiné modely jde vybrat v **Nastavení**. Model pro OCR i pro uhlazení musí umět obrázky (vision).
+   Jiné modely jde vybrat v **Nastavení**. Model pro OCR i pro opravy musí umět obrázky (vision).
 3. Paměť: modely se načítají po jednom, stačí **16 GB RAM** (Mac) nebo **GPU s 12 GB VRAM** (Windows).
 
-Server LM Studia si TransLatte spustí samo, modely načítá a po dokončení uvolňuje.
+Server LM Studia si TransLatte spustí samo, modely načítá a po dokončení uvolňuje. Jediné spojení
+s internetem je jednorázové stažení českého slovníku pro kontrolu pravopisu; bez něj se pravopis přeskočí.
 
 ## Instalace
 
@@ -84,6 +91,6 @@ GitHub Actions sestaví instalátory pro macOS a Windows a vydají release.
 
 ## Plán
 
-- **Fáze 2 (učení)**: překladová paměť z tvých oprav, automatický glosář, kontext dokumentu, hodnocení
+- **Fáze 2 (učení)**: překladová paměť z tvých oprav, automatický glosář, hodnocení
   odstavců, ruční oprava OCR, shrnutí dokumentu.
 - **Fáze 3**: export oprav jako dataset pro doladění vlastního modelu.

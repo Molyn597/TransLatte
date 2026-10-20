@@ -15,7 +15,12 @@ await Promise.all([
   }),
   build({
     ...common,
-    entryPoints: { preload: 'src/preload/preload.ts', 'pdf-preload': 'src/preload/pdf-preload.ts' },
+    entryPoints: {
+      preload: 'src/preload/preload.ts',
+      'pdf-preload': 'src/preload/pdf-preload.ts',
+      // Kontrola pravopisu ve worker_threads; v zabalené aplikaci se rozbalí z app.asar (asarUnpack).
+      'spell-worker': 'src/main/spell-worker.ts',
+    },
     outdir: 'dist',
     platform: 'node',
     format: 'cjs',

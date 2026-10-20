@@ -1,6 +1,6 @@
 export type Mode = 'fast' | 'balanced' | 'quality';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
-export type Stage = 'prepare' | 'extract' | 'ocr' | 'tables' | 'translate' | 'polish' | 'glossary' | 'write';
+export type Stage = 'prepare' | 'extract' | 'ocr' | 'tables' | 'context' | 'translate' | 'check' | 'fix' | 'write';
 export type SegmentKind = 'heading' | 'paragraph' | 'list' | 'table';
 /** mono = černobílý vysoký kontrast (vždy světlý podklad). */
 export type Theme = 'system' | 'light' | 'dark' | 'mono';
@@ -48,6 +48,20 @@ export interface Job {
   output?: string;
   /** Doba jednotlivých fází v sekundách. */
   timings?: Partial<Record<Stage, number>>;
+  /** Kontext dokumentu (jen režim Kvalitní). */
+  context?: DocumentContext;
+  /** Poznámky k celé úloze, např. přeskočená kontrola pravopisu. */
+  notes?: string[];
+}
+
+export interface DocumentContext {
+  topic: string;
+  domain: string;
+  author: string;
+  authorGender: 'female' | 'male' | 'unknown';
+  audience: string;
+  /** Termíny dokumentu, `target` je v cílovém jazyce. */
+  terms: GlossaryEntry[];
 }
 
 export interface JobOptions {
@@ -72,7 +86,7 @@ export interface Models {
 export interface Rates {
   ocrPerPage: number;
   translatePerKChar: number;
-  polishPerKChar: number;
+  fixPerSegment: number;
 }
 
 export interface Settings {

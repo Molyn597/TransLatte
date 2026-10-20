@@ -1,7 +1,7 @@
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import { languageName } from '../shared/languages';
 import { PDFJS_OPTIONS } from '../shared/pdf';
-import type { Job, JobDetail, Mode, Segment, Stage } from '../shared/types';
+import type { DocumentContext, Job, JobDetail, Mode, Segment, Stage } from '../shared/types';
 import {
   date,
   duration,
@@ -24,6 +24,9 @@ type Tab = 'compare' | 'translation' | 'original' | 'info';
 
 const $ = (id: string) => document.getElementById(id)!;
 const finalText = (s: Segment) => s.edited ?? s.polished ?? s.translation ?? '';
+const GENDER: Record<DocumentContext['authorGender'], string> = { female: 'žena', male: 'muž', unknown: 'rod neznámý' };
+// Fáze ze starších úloh (celotextové uhlazení), aby jejich doba měla v Informacích popisek.
+const OLD_STAGES: Record<string, string> = { polish: 'Uhlazuji text', glossary: 'Kontroluji glosář' };
 
 let current: JobDetail | null = null;
 let tab: Tab = 'compare';
@@ -198,9 +201,14 @@ function infoView(detail: JobDetail) {
   if (job.chars) row('Znaků originálu', job.chars.toLocaleString('cs-CZ'));
   row('Odstavců', String(segments.length));
   if (job.output) row('Výstup', job.output);
+  if (job.context) {
+    const c = job.context;
+    row('Kontext dokumentu', `${c.topic || 'téma neuvedeno'}; autor: ${c.author || 'neuveden'} (${GENDER[c.authorGender]})`);
+  }
+  if (job.notes?.length) row('Poznámky', job.notes.join(' '));
   const timings = Object.entries(job.timings ?? {}).filter(([, s]) => s >= 1);
   if (timings.length) {
-    row('Fáze', timings.map(([stage, s]) => `${STAGES[stage as Stage]}: ${duration(s)}`).join(' · '));
+    row('Fáze', timings.map(([stage, s]) => `${STAGES[stage as Stage] ?? OLD_STAGES[stage] ?? stage}: ${duration(s)}`).join(' · '));
   }
   const box = h('div', { class: 'view' }, dl);
   if (job.error) box.prepend(h('div', { class: 'error-box' }, job.error));

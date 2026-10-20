@@ -110,3 +110,12 @@ export function misspelledWords(checker: SpellChecker, translation: string, sour
   }
   return [...found.values()];
 }
+
+export interface SpellItem {
+  translation: string;
+  source: string;
+}
+
+/** Dávka pro spell worker: chybná slova pro každou položku. */
+export const spellBatch = (checker: SpellChecker, items: SpellItem[]) =>
+  items.map((i) => misspelledWords(checker, i.translation, i.source));

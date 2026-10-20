@@ -1,5 +1,5 @@
 import { englishName } from '../shared/languages';
-import type { GlossaryEntry } from '../shared/types';
+import type { DocumentContext, GlossaryEntry } from '../shared/types';
 
 export const OCR_PROMPT = 'Convert the document to markdown.';
 
@@ -35,29 +35,53 @@ function glossaryLines(glossary: GlossaryEntry[]) {
   return glossary.map((g) => `${g.source} = ${g.target}`).join('\n');
 }
 
-export function polishSystem(target: string, glossary: GlossaryEntry[]) {
-  const terms = glossary.length ? glossaryLines(glossary) : '';
-  if (target === 'cs') {
-    return (
-      'Jsi zkušený český redaktor odborných textů. Dostaneš originál a jeho strojový překlad do češtiny. ' +
-      'Uprav překlad do přirozené, plynulé a gramaticky správné češtiny. Oprav chyby ve významu podle originálu. ' +
-      'Nic nepřidávej ani nevynechávej. Zachovej odstavce (prázdné řádky), seznamy i tabulky. ' +
-      'Vrať pouze upravený český text bez komentářů.' +
-      (terms ? `\n\nZávazná terminologie (použij ji ve správném tvaru):\n${terms}` : '')
-    );
+const GENDER_CS = { female: 'žena', male: 'muž', unknown: 'neznámý' };
+
+// Termíny z kontextu se korektorovi nepředávají, model je generuje nespolehlivě.
+function contextLines(context: DocumentContext | undefined, target: string) {
+  if (!context) return [];
+  const cs = target === 'cs';
+  const lines = [];
+  if (context.topic) lines.push(`${cs ? 'Téma' : 'Topic'}: ${context.topic}`);
+  if (context.domain) lines.push(`${cs ? 'Obor' : 'Domain'}: ${context.domain}`);
+  if (context.author || context.authorGender !== 'unknown') {
+    const gender = cs ? GENDER_CS[context.authorGender] : context.authorGender;
+    lines.push(`${cs ? 'Autor' : 'Author'}: ${context.author || (cs ? 'neuveden' : 'not stated')} (${cs ? 'rod' : 'gender'}: ${gender})`);
   }
-  const lang = englishName(target);
-  return (
-    `You are an experienced ${lang} editor of technical texts. You get an original and its machine translation into ` +
-    `${lang}. Rewrite the translation into natural, fluent and grammatically correct ${lang} and fix meaning errors ` +
-    `using the original. Do not add or omit anything. Keep paragraphs (blank lines), lists and tables. ` +
-    `Output only the edited ${lang} text without comments.` +
-    (terms ? `\n\nMandatory terminology (use it in the grammatically correct form):\n${terms}` : '')
-  );
+  return lines;
 }
 
-export function polishUser(source: string, translation: string, target: string) {
-  return target === 'cs'
-    ? `ORIGINÁL:\n${source}\n\nPŘEKLAD:\n${translation}`
-    : `ORIGINAL:\n${source}\n\nTRANSLATION:\n${translation}`;
+/** Korektor opravuje jen nalezené problémy; celotextové uhlazení přidávalo nové chyby. */
+export function fixSystem(target: string, glossary: GlossaryEntry[], context?: DocumentContext) {
+  const cs = target === 'cs';
+  const parts = [
+    cs
+      ? 'Jsi korektor překladů. Oprav POUZE uvedené problémy, vše ostatní ponech beze změny slovo od slova. Vrať jen opravený text.'
+      : 'You are a translation proofreader. Fix ONLY the listed problems, keep everything else unchanged word for word. Output only the corrected text.',
+  ];
+  const ctx = contextLines(context, target);
+  if (ctx.length) parts.push(`${cs ? 'Kontext dokumentu' : 'Document context'}:\n${ctx.join('\n')}`);
+  if (glossary.length) {
+    parts.push(
+      `${cs ? 'Závazná terminologie (použij ji ve správném tvaru)' : 'Mandatory terminology (use it in the grammatically correct form)'}:\n${glossaryLines(glossary)}`,
+    );
+  }
+  return parts.join('\n\n');
+}
+
+export function fixUser(source: string, translation: string, problems: string[], target: string) {
+  const [o, t, p] = target === 'cs' ? ['ORIGINÁL', 'PŘEKLAD', 'PROBLÉMY'] : ['ORIGINAL', 'TRANSLATION', 'PROBLEMS'];
+  return `${o}:\n${source}\n\n${t}:\n${translation}\n\n${p}:\n${problems.map((x) => `- ${x}`).join('\n')}`;
+}
+
+export function contextPrompt(sample: string, target: string) {
+  return (
+    'Read the beginning of the document below and describe it as JSON only, without any other text:\n' +
+    '{"topic": "...", "domain": "...", "author": "...", "authorGender": "female" | "male" | "unknown", ' +
+    '"audience": "...", "terms": [{"source": "...", "target": "..."}]}\n' +
+    `Write topic, domain and audience in ${englishName(target)}. author is the author's name as written, or "" when unknown. ` +
+    'authorGender is the gender of the author writing in the first person; use "unknown" when it is not clear. ' +
+    `terms are up to 15 key technical terms exactly as written in the document, with their usual ${englishName(target)} translation as target.` +
+    `\n\nDOCUMENT:\n${sample}`
+  );
 }

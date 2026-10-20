@@ -20,7 +20,7 @@ function blend(rates: Rates, m: Measured): Rates {
   return {
     ocrPerPage: mix(rates.ocrPerPage, m.ocrPerPage),
     translatePerKChar: mix(rates.translatePerKChar, m.translatePerKChar),
-    polishPerKChar: mix(rates.polishPerKChar, m.polishPerKChar),
+    fixPerSegment: mix(rates.fixPerSegment, m.fixPerSegment),
   };
 }
 
@@ -83,6 +83,8 @@ export class Queue {
       progress: undefined,
       output: undefined,
       warnings: 0,
+      context: undefined,
+      notes: undefined,
     };
     await mkdir(this.store.jobDir(job.id), { recursive: true });
     await copyFile(this.store.inputPath(old), this.store.inputPath(job));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isTranslateGemma, polishSystem, polishUser, translateGemmaPrompt } from '../src/main/prompts';
+import { contextPrompt, fixSystem, fixUser, isTranslateGemma, translateGemmaPrompt } from '../src/main/prompts';
 
 describe('translateGemmaPrompt', () => {
   it('odpovídá oficiální šabloně TranslateGemma', () => {
@@ -18,16 +18,41 @@ describe('translateGemmaPrompt', () => {
   });
 });
 
-describe('polish prompty', () => {
-  it('pro češtinu je prompt česky a obsahuje glosář', () => {
-    const system = polishSystem('cs', [{ source: 'fine-tuning', target: 'doladění' }]);
-    expect(system).toContain('český redaktor');
+describe('prompty korektora', () => {
+  const context = {
+    topic: 'Řízení týmů',
+    domain: 'HR',
+    author: 'Jana Nováková',
+    authorGender: 'female' as const,
+    audience: '',
+    terms: [{ source: 'Check-in', target: 'Check-in (běžné zpětné vazby)' }],
+  };
+
+  it('pro češtinu česky s kontextem a glosářem', () => {
+    const system = fixSystem('cs', [{ source: 'fine-tuning', target: 'doladění' }], context);
+    expect(system).toContain(
+      'Jsi korektor překladů. Oprav POUZE uvedené problémy, vše ostatní ponech beze změny slovo od slova. Vrať jen opravený text.',
+    );
+    expect(system).toContain('Téma: Řízení týmů\nObor: HR\nAutor: Jana Nováková (rod: žena)');
     expect(system).toContain('fine-tuning = doladění');
-    expect(polishUser('A', 'B', 'cs')).toBe('ORIGINÁL:\nA\n\nPŘEKLAD:\nB');
+    expect(system).not.toContain('běžné zpětné vazby');
+    expect(fixUser('A', 'B', ['Překlep: x.', 'Chybí termín.'], 'cs')).toBe(
+      'ORIGINÁL:\nA\n\nPŘEKLAD:\nB\n\nPROBLÉMY:\n- Překlep: x.\n- Chybí termín.',
+    );
   });
 
-  it('pro jiné jazyky je prompt anglicky', () => {
-    expect(polishSystem('de', [])).toContain('German editor');
-    expect(polishSystem('de', [])).not.toContain('terminology');
+  it('pro jiné jazyky anglicky, bez kontextu a glosáře jen zadání', () => {
+    expect(fixSystem('de', [])).toBe(
+      'You are a translation proofreader. Fix ONLY the listed problems, keep everything else unchanged word for word. Output only the corrected text.',
+    );
+    expect(fixSystem('de', [], { ...context, author: '' })).toContain('Author: not stated (gender: female)');
+    expect(fixUser('A', 'B', ['x'], 'de')).toBe('ORIGINAL:\nA\n\nTRANSLATION:\nB\n\nPROBLEMS:\n- x');
+  });
+
+  it('kontext chce JSON s termíny v cílovém jazyce', () => {
+    const prompt = contextPrompt('Text.', 'cs');
+    expect(prompt).toContain('"authorGender": "female" | "male" | "unknown"');
+    expect(prompt).toContain('usual Czech translation');
+    expect(prompt.endsWith('DOCUMENT:\nText.')).toBe(true);
   });
 });

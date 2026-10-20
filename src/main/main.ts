@@ -29,9 +29,10 @@ const STAGE_LABEL: Record<Stage, string> = {
   extract: 'Čtu dokument',
   ocr: 'OCR',
   tables: 'Tabulky',
+  context: 'Kontext',
   translate: 'Překládám',
-  polish: 'Uhlazuji',
-  glossary: 'Glosář',
+  check: 'Kontrola',
+  fix: 'Opravy',
   write: 'Ukládám',
 };
 

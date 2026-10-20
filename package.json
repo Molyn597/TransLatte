@@ -27,6 +27,9 @@
       "!dist/**/*.map",
       "package.json"
     ],
+    "asarUnpack": [
+      "dist/spell-worker.js"
+    ],
     "mac": {
       "target": [
         {
