@@ -43,6 +43,8 @@ export interface Job {
   progress?: Progress;
   /** Název výstupního souboru ve složce úlohy. */
   output?: string;
+  /** Doba jednotlivých fází v sekundách. */
+  timings?: Partial<Record<Stage, number>>;
 }
 
 export interface GlossaryEntry {

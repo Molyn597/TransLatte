@@ -85,7 +85,8 @@ export async function ensureModel(modelKey: string, identifier: string) {
   if (loaded.some((m) => m.identifier === identifier && m.modelKey === modelKey)) return;
   if (loaded.length) await lms(['unload', '--all']);
   try {
-    await lms(['load', modelKey, '-y', '-c', '8192', '--identifier', identifier]);
+    // 16k kontextu: LM Studio ho dělí mezi souběžné požadavky (pipeline jich posílá až 4).
+    await lms(['load', modelKey, '-y', '-c', '16384', '--identifier', identifier]);
   } catch (e) {
     throw new Error(`Model „${modelKey}“ se nepodařilo načíst. Je stažený v LM Studiu? (${(e as Error).message})`);
   }

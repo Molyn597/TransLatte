@@ -19,19 +19,26 @@ import {
 import { glossaryMisses, hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
 import {
   blocksToSegments,
+  dropRepeatedBlocks,
   finalText,
   groupSegments,
   layoutToBlocks,
   markdownToBlocks,
+  mergeAcrossPages,
   normalizeMarkdownTable,
   parseOcr,
+  removePageFurniture,
   segmentsToMarkdown,
+  sentenceChunks,
   splitBatch,
+  stripAddedPeriod,
   type Block,
 } from './segments';
 import type { Store } from './store';
 
 const BATCH_CHARS = 1500;
+// LM Studio zpracuje víc požadavků najednou; na M5 Air to zrychlí překlad zhruba o třetinu.
+const PARALLEL = 4;
 const SCAN_TEXT_CHARS = 50;
 const OCR_MATCH = 0.85;
 const ID = { ocr: 'translatte-ocr', translate: 'translatte-translate', polish: 'translatte-polish' };
@@ -94,6 +101,15 @@ class Eta {
 
 function check(signal: AbortSignal) {
   if (signal.aborted) throw new DOMException('Zrušeno', 'AbortError');
+}
+
+/** Zpracuje položky nejvýš po `limit` souběžně (pořadí výsledků se nemění). */
+async function eachParallel<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
 // ---------- Načtení dokumentu ----------
@@ -184,12 +200,13 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
   const { pages } = await openPdf(docId, new Uint8Array(await readFile(file)));
   job.pages = pages;
   try {
-    const layouts: { blocks: Block[]; scanned: boolean }[] = [];
-    for (let p = 1; p <= pages; p++) {
-      const { items, width } = await pageText(docId, p);
-      const chars = items.reduce((n, i) => n + i.str.trim().length, 0);
-      layouts.push({ blocks: layoutToBlocks(items, width, p), scanned: chars < SCAN_TEXT_CHARS });
-    }
+    const texts = [];
+    for (let p = 1; p <= pages; p++) texts.push(await pageText(docId, p));
+    const content = removePageFurniture(texts);
+    const layouts = texts.map(({ items, width }, i) => ({
+      blocks: layoutToBlocks(content[i], width, i + 1),
+      scanned: items.reduce((n, it) => n + it.str.trim().length, 0) < SCAN_TEXT_CHARS,
+    }));
     // Rychlý režim čte digitální stránky z textové vrstvy, OCR jen u skenů.
     const ocrPages = layouts
       .map((l, i) => i + 1)
@@ -223,14 +240,20 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
         if (layout.scanned) warnings.set(p, 'OCR této stránky může obsahovat chyby. Zkontroluj ji proti originálu.');
         else {
           result = layout.blocks;
-          warnings.set(p, 'OCR se neshodovalo s textem v PDF, proto je použit text přímo z PDF (může mít horší pořadí odstavců).');
+          // U krátké stránky (zápatí webu, titulní list) na pořadí odstavců nezáleží.
+          if (reference.length > 400) {
+            warnings.set(p, 'OCR se neshodovalo s textem v PDF, proto je použit text přímo z PDF (může mít horší pořadí odstavců).');
+          }
         }
+      } else if (!layout.scanned) {
+        // Text z obrázků a ikon (sdílení, loga), který v PDF není, se nepřekládá.
+        result = result.filter((b) => b.kind === 'table' || wordOverlap(reference, b.text).precision >= 0.5);
       }
       blocks.push(...result);
       done++;
     }
     await repairTables(ctx, docId, blocks);
-    const segments = blocksToSegments(blocks);
+    const segments = blocksToSegments(mergeAcrossPages(dropRepeatedBlocks(blocks)));
     for (const s of segments) if (s.page && warnings.has(s.page)) s.warning ??= warnings.get(s.page);
     return segments;
   } finally {
@@ -299,30 +322,74 @@ async function translateTable(ctx: JobContext, table: string) {
 
 const looksWrong = (source: string, out: string) => !out || suspiciousLength(source, out) || hasRepetition(out);
 
-async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
-  const groups = groupSegments(segments, BATCH_CHARS);
+/** Část odstavce k překladu; dlouhé odstavce se dělí po větách, aby šly zpracovat souběžně. */
+interface Unit {
+  seg: Segment;
+  source: string;
+  translation?: string;
+  polished?: string;
+}
+
+const LONG_PARAGRAPH = 900;
+
+function toUnits(segments: Segment[]): Unit[] {
+  return segments
+    .filter((s) => s.kind !== 'table')
+    .flatMap((seg) =>
+      seg.kind === 'paragraph' && seg.source.length > LONG_PARAGRAPH
+        ? sentenceChunks(seg.source, LONG_PARAGRAPH).map((source) => ({ seg, source }))
+        : [{ seg, source: seg.source }],
+    );
+}
+
+const unitGroups = (units: Unit[]) =>
+  groupSegments(
+    units.map((u, id) => ({ id, kind: u.seg.kind, source: u.source })),
+    BATCH_CHARS,
+  ).map((g) => g.map((i) => units[i]));
+
+const joinUnits = (units: Unit[], seg: Segment, pick: (u: Unit) => string) =>
+  units
+    .filter((u) => u.seg === seg)
+    .map(pick)
+    .join(' ');
+
+async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta): Promise<Unit[]> {
+  const units = toUnits(segments);
   const total = segments.reduce((n, s) => n + s.source.length, 0);
   let done = 0;
-  await ensureModel(ctx.settings.models.translate, ID.translate);
-  for (const group of groups) {
-    check(ctx.signal);
+  const report = (chars: number) => {
+    done += chars;
     ctx.progress({ stage: 'translate', done, total, eta: eta.remaining('translate', done, total) });
-    const items = group.map((i) => segments[i]);
-    if (items.length === 1 && items[0].kind === 'table') {
-      items[0].translation = await translateTable(ctx, items[0].source);
-    } else {
-      const parts = splitBatch(await translateText(ctx, items.map((s) => s.source).join('\n\n')), items.length);
-      for (const [i, s] of items.entries()) {
+  };
+  await ensureModel(ctx.settings.models.translate, ID.translate);
+  report(0);
+  const tasks: (() => Promise<void>)[] = [
+    ...segments
+      .filter((s) => s.kind === 'table')
+      .map((table) => async () => {
+        table.translation = await translateTable(ctx, table.source);
+        report(table.source.length);
+      }),
+    ...unitGroups(units).map((items) => async () => {
+      check(ctx.signal);
+      const parts = splitBatch(await translateText(ctx, items.map((u) => u.source).join('\n\n')), items.length);
+      for (const [i, u] of items.entries()) {
         // Dávka se nerozdělila na stejný počet odstavců nebo část vypadá useknutě: přeložit zvlášť.
-        if (parts && !looksWrong(s.source, parts[i])) s.translation = parts[i];
+        if (parts && !looksWrong(u.source, parts[i])) u.translation = parts[i];
         else {
-          s.translation = await translateText(ctx, s.source);
-          if (looksWrong(s.source, s.translation)) s.warning ??= 'Překlad tohoto odstavce může být neúplný.';
+          u.translation = await translateText(ctx, u.source);
+          if (looksWrong(u.source, u.translation)) u.seg.warning ??= 'Překlad tohoto odstavce může být neúplný.';
         }
       }
-    }
-    done += items.reduce((n, s) => n + s.source.length, 0);
+      report(items.reduce((n, u) => n + u.source.length, 0));
+    }),
+  ];
+  await eachParallel(tasks, PARALLEL, (task) => task());
+  for (const seg of segments) {
+    if (seg.kind !== 'table') seg.translation = stripAddedPeriod(seg.source, joinUnits(units, seg, (u) => u.translation ?? ''));
   }
+  return units;
 }
 
 async function polishText(ctx: JobContext, source: string, translation: string, glossary: GlossaryEntry[]) {
@@ -342,24 +409,27 @@ async function polishText(ctx: JobContext, source: string, translation: string, 
 const polishOk = (translation: string, polished: string) =>
   Boolean(polished) && polished.length / Math.max(translation.length, 1) > 0.6 && polished.length / Math.max(translation.length, 1) < 1.6;
 
-async function polishAll(ctx: JobContext, segments: Segment[], eta: Eta) {
-  const groups = groupSegments(segments, BATCH_CHARS).filter((g) => segments[g[0]].kind !== 'table');
-  const total = groups.flat().reduce((n, i) => n + segments[i].source.length, 0);
+async function polishAll(ctx: JobContext, segments: Segment[], units: Unit[], eta: Eta) {
+  const groups = unitGroups(units);
+  const total = units.reduce((n, u) => n + u.source.length, 0);
   let done = 0;
   await ensureModel(ctx.settings.models.polish, ID.polish);
-  for (const group of groups) {
+  ctx.progress({ stage: 'polish', done, total, eta: eta.remaining('polish', done, total) });
+  await eachParallel(groups, PARALLEL, async (items) => {
     check(ctx.signal);
-    ctx.progress({ stage: 'polish', done, total, eta: eta.remaining('polish', done, total) });
-    const items = group.map((i) => segments[i]);
-    const source = items.map((s) => s.source).join('\n\n');
-    const translation = items.map((s) => s.translation ?? '').join('\n\n');
+    const source = items.map((u) => u.source).join('\n\n');
+    const translation = items.map((u) => u.translation ?? '').join('\n\n');
     const parts = splitBatch(await polishText(ctx, source, translation, relevantGlossary(source, ctx.glossary)), items.length);
-    for (const [i, s] of items.entries()) {
+    for (const [i, u] of items.entries()) {
       let polished = parts?.[i];
-      if (!polished) polished = await polishText(ctx, s.source, s.translation ?? '', relevantGlossary(s.source, ctx.glossary));
-      if (polishOk(s.translation ?? '', polished)) s.polished = polished;
+      if (!polished) polished = await polishText(ctx, u.source, u.translation ?? '', relevantGlossary(u.source, ctx.glossary));
+      u.polished = polishOk(u.translation ?? '', polished) ? polished : u.translation;
     }
-    done += items.reduce((n, s) => n + s.source.length, 0);
+    done += items.reduce((n, u) => n + u.source.length, 0);
+    ctx.progress({ stage: 'polish', done, total, eta: eta.remaining('polish', done, total) });
+  });
+  for (const seg of segments) {
+    if (seg.kind !== 'table') seg.polished = stripAddedPeriod(seg.source, joinUnits(units, seg, (u) => u.polished ?? u.translation ?? ''));
   }
 }
 
@@ -368,14 +438,16 @@ async function enforceGlossary(ctx: JobContext, segments: Segment[]) {
   const todo = segments.filter((s) => s.kind !== 'table' && glossaryMisses(s.source, finalText(s), ctx.glossary).length);
   if (!todo.length) return;
   await ensureModel(ctx.settings.models.polish, ID.polish);
-  for (const [i, s] of todo.entries()) {
+  let done = 0;
+  ctx.progress({ stage: 'glossary', done, total: todo.length });
+  await eachParallel(todo, PARALLEL, async (s) => {
     check(ctx.signal);
-    ctx.progress({ stage: 'glossary', done: i, total: todo.length });
     const fixed = await polishText(ctx, s.source, finalText(s), relevantGlossary(s.source, ctx.glossary));
-    if (polishOk(finalText(s), fixed)) s.polished = fixed;
+    if (polishOk(finalText(s), fixed)) s.polished = stripAddedPeriod(s.source, fixed);
     const still = glossaryMisses(s.source, finalText(s), ctx.glossary);
     if (still.length) s.warning ??= `Chybí termín z glosáře: ${still.map((g) => `${g.source} → ${g.target}`).join(', ')}`;
-  }
+    ctx.progress({ stage: 'glossary', done: ++done, total: todo.length });
+  });
 }
 
 function detectLanguage(segments: Segment[]) {
@@ -409,11 +481,11 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
     for (const s of segments) s.translation = s.source;
   } else {
     t = Date.now();
-    await translateAll(ctx, segments, eta);
+    const units = await translateAll(ctx, segments, eta);
     measured.translatePerKChar = (Date.now() - t) / job.chars;
     if (usePolish) {
       t = Date.now();
-      await polishAll(ctx, segments, eta);
+      await polishAll(ctx, segments, units, eta);
       measured.polishPerKChar = (Date.now() - t) / job.chars;
     }
     await enforceGlossary(ctx, segments);

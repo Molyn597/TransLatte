@@ -135,6 +135,13 @@ export class Queue {
     await this.store.saveJob(job);
     this.events.update(job);
 
+    job.timings = {};
+    let stageStart = Date.now();
+    const closeStage = () => {
+      const stage = job.progress?.stage;
+      if (stage) job.timings![stage] = (job.timings![stage] ?? 0) + (Date.now() - stageStart) / 1000;
+      stageStart = Date.now();
+    };
     try {
       const settings = await this.store.settings();
       const measured = await runJob({
@@ -144,6 +151,7 @@ export class Queue {
         store: this.store,
         signal: abort.signal,
         progress: (p) => {
+          if (p.stage !== job.progress?.stage) closeStage();
           job.progress = p;
           // Průběh posílat nejvýš 4× za sekundu, ať se UI nezahltí.
           if (Date.now() - this.lastSent > 250) {
@@ -164,6 +172,7 @@ export class Queue {
         job.error = err.message || String(err);
       }
     } finally {
+      closeStage();
       job.finishedAt = Date.now();
       job.progress = undefined;
       await this.store.saveJob(job);

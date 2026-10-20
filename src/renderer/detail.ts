@@ -1,9 +1,10 @@
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import { languageName } from '../shared/languages';
 import { PDFJS_OPTIONS } from '../shared/pdf';
-import type { Job, JobDetail, Mode, Segment } from '../shared/types';
+import type { Job, JobDetail, Mode, Segment, Stage } from '../shared/types';
 import {
   date,
+  duration,
   h,
   icon,
   ICONS,
@@ -12,6 +13,7 @@ import {
   MODES,
   progressBar,
   progressInfo,
+  STAGES,
   STATUS_TEXT,
   toast,
 } from './dom';
@@ -196,6 +198,10 @@ function infoView(detail: JobDetail) {
   if (job.chars) row('Znaků originálu', job.chars.toLocaleString('cs-CZ'));
   row('Odstavců', String(segments.length));
   if (job.output) row('Výstup', job.output);
+  const timings = Object.entries(job.timings ?? {}).filter(([, s]) => s >= 1);
+  if (timings.length) {
+    row('Fáze', timings.map(([stage, s]) => `${STAGES[stage as Stage]}: ${duration(s)}`).join(' · '));
+  }
   const box = h('div', { class: 'view' }, dl);
   if (job.error) box.prepend(h('div', { class: 'error-box' }, job.error));
   const warned = segments.filter((s) => s.warning);

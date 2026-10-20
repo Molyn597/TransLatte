@@ -222,8 +222,79 @@ export function layoutToBlocks(items: TextItem[], pageWidth: number, page: numbe
   return [above, left, right, below].flatMap((group) => linesToBlocks(toLines(group), page, pageMetrics));
 }
 
+/**
+ * Záhlaví a zápatí: krátký text na stejném místě na více stránkách (lišta webu, název časopisu)
+ * a samotná čísla stránek u horního nebo dolního okraje.
+ */
+export function removePageFurniture(pages: { items: TextItem[]; height: number }[]): TextItem[][] {
+  const key = (i: TextItem) => `${i.str.trim()}|${Math.round(i.y / 4)}`;
+  const seen = new Map<string, Set<number>>();
+  pages.forEach((p, n) => {
+    for (const i of p.items) {
+      if (!i.str.trim() || i.str.trim().length > 60) continue;
+      if (!seen.has(key(i))) seen.set(key(i), new Set());
+      seen.get(key(i))!.add(n);
+    }
+  });
+  const repeated = (i: TextItem) => pages.length > 1 && (seen.get(key(i))?.size ?? 0) >= Math.max(2, pages.length / 2);
+  return pages.map((p) =>
+    p.items.filter((i) => {
+      const nearEdge = i.y < p.height * 0.07 || i.y > p.height * 0.93;
+      return !repeated(i) && !(nearEdge && /^\s*\d{1,3}\s*$/.test(i.str));
+    }),
+  );
+}
+
+/** Stejné krátké bloky na většině stránek (záhlaví z OCR) se zahodí. */
+export function dropRepeatedBlocks(blocks: Block[]): Block[] {
+  const pages = new Set(blocks.map((b) => b.page)).size;
+  if (pages < 2) return blocks;
+  const onPages = new Map<string, Set<number | undefined>>();
+  for (const b of blocks) {
+    if (b.text.length > 60) continue;
+    if (!onPages.has(b.text)) onPages.set(b.text, new Set());
+    onPages.get(b.text)!.add(b.page);
+  }
+  return blocks.filter((b) => (onPages.get(b.text)?.size ?? 0) < Math.max(2, pages / 2));
+}
+
+const SENTENCE_END = /[.!?:;…"”'’)\]]$/;
+
+/**
+ * Odstavec rozdělený koncem stránky se spojí. Jinak by se obě půlky překládaly zvlášť
+ * a model by první dokončil vymyšleným koncem.
+ */
+export function mergeAcrossPages(blocks: Block[]): Block[] {
+  const out: Block[] = [];
+  for (const b of blocks) {
+    const prev = out[out.length - 1];
+    if (
+      prev &&
+      prev.kind === 'paragraph' &&
+      b.kind === 'paragraph' &&
+      prev.page !== undefined &&
+      b.page === prev.page + 1 &&
+      // Krátký řádek bez tečky (hashtag, podpis) není useknutý odstavec.
+      prev.text.length >= 80 &&
+      !SENTENCE_END.test(prev.text.trim())
+    ) {
+      prev.text = /\p{L}-$/u.test(prev.text) && /^\p{Ll}/u.test(b.text) ? prev.text.slice(0, -1) + b.text : `${prev.text} ${b.text}`;
+      if (b.warning) prev.warning ??= b.warning;
+      continue;
+    }
+    out.push({ ...b });
+  }
+  return out;
+}
+
+/** TranslateGemma přidává tečku i za nadpis nebo položku bez tečky. */
+export function stripAddedPeriod(source: string, translation: string) {
+  return !/[.!?…]$/.test(source.trim()) && /[^.]\.$/.test(translation.trim()) ? translation.trim().slice(0, -1) : translation;
+}
+
 export function blocksToSegments(blocks: Block[]): Segment[] {
-  return blocks.map((b, id) => ({ id, kind: b.kind, page: b.page, source: b.text, ...(b.warning && { warning: b.warning }) }));
+  // Samotné symboly (☰, ikony z webu) nejsou text k překladu.
+  return blocks.filter((b) => /[\p{L}\p{N}]/u.test(b.text)).map((b, id) => ({ id, kind: b.kind, page: b.page, source: b.text, ...(b.warning && { warning: b.warning }) }));
 }
 
 /** Indexy segmentů seskupené do dávek pro překlad; tabulky jdou samostatně. */
@@ -251,8 +322,22 @@ export function groupSegments(segments: Segment[], maxChars: number): number[][]
   return groups;
 }
 
+/** Rozdělí dlouhý odstavec po větách na části do `max` znaků (věta se nikdy nedělí). */
+export function sentenceChunks(text: string, max: number): string[] {
+  const sentences = text.split(/(?<=[.!?…])\s+(?=[\p{Lu}\d"„“(])/u);
+  const chunks: string[] = [];
+  for (const sentence of sentences) {
+    const last = chunks[chunks.length - 1];
+    if (last !== undefined && last.length + sentence.length + 1 <= max) chunks[chunks.length - 1] = `${last} ${sentence}`;
+    else chunks.push(sentence);
+  }
+  return chunks;
+}
+
 /** Rozdělí přeloženou dávku zpět na segmenty; null, když model sloučil nebo rozdělil odstavce. */
 export function splitBatch(text: string, expected: number): string[] | null {
+  // Jediný odstavec v dávce: že ho model rozdělil na dva, nevadí.
+  if (expected === 1) return text.trim() ? [text.trim().replace(/\s*\n\s*\n\s*/g, ' ')] : null;
   const parts = text
     .trim()
     .split(/\n\s*\n/)

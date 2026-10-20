@@ -5,10 +5,15 @@ import {
   groupSegments,
   layoutToBlocks,
   markdownToBlocks,
+  dropRepeatedBlocks,
+  mergeAcrossPages,
   normalizeMarkdownTable,
   parseOcr,
+  removePageFurniture,
   segmentsToMarkdown,
+  sentenceChunks,
   splitBatch,
+  stripAddedPeriod,
 } from '../src/main/segments';
 
 describe('parseOcr', () => {
@@ -128,6 +133,8 @@ describe('dávky pro překlad', () => {
   it('rozdělí odpověď jen při stejném počtu odstavců', () => {
     expect(splitBatch('jedna\n\ndva\n\n\ntři', 3)).toEqual(['jedna', 'dva', 'tři']);
     expect(splitBatch('jedna dva', 2)).toBeNull();
+    // Jediný odstavec, který model rozdělil na dva, se nepřekládá znovu.
+    expect(splitBatch('první půlka\n\ndruhá půlka', 1)).toEqual(['první půlka druhá půlka']);
   });
 
   it('Markdown výstup používá úpravy uživatele před ostatními verzemi', () => {
@@ -148,5 +155,76 @@ describe('normalizeMarkdownTable', () => {
 
   it('odmítne odpověď, která není tabulka', () => {
     expect(normalizeMarkdownTable('Sorry, I cannot read this.')).toBeNull();
+  });
+});
+
+describe('záhlaví, zápatí a konce stránek', () => {
+  // Podle skutečného PDF: lišta webu „Sign In“ na každé stránce na stejném místě.
+  const page = (n: number, text: string) => ({
+    height: 792,
+    items: [item('Sign In', 535, 52, 40), item(text, 50, 300, 400), item(String(n), 300, 770, 6)],
+  });
+
+  it('odstraní opakovanou lištu a čísla stránek, text nechá', () => {
+    const out = removePageFurniture([page(1, 'First page text'), page(2, 'Second page text'), page(3, 'Third')]);
+    expect(out.map((items) => items.map((i) => i.str))).toEqual([['First page text'], ['Second page text'], ['Third']]);
+  });
+
+  it('jednostránkový dokument nechá beze změny (kromě čísla stránky)', () => {
+    expect(removePageFurniture([page(1, 'Only page')])[0].map((i) => i.str)).toEqual(['Sign In', 'Only page']);
+  });
+
+  it('zahodí stejné krátké bloky z OCR na většině stránek', () => {
+    const blocks = [1, 2, 3].flatMap((p) => [
+      { kind: 'paragraph' as const, text: 'Journal of Examples 12', page: p },
+      { kind: 'paragraph' as const, text: `Body ${p}`, page: p },
+    ]);
+    expect(dropRepeatedBlocks(blocks).map((b) => b.text)).toEqual(['Body 1', 'Body 2', 'Body 3']);
+  });
+
+  it('spojí odstavec rozdělený koncem stránky, ukončený odstavec ne', () => {
+    const merged = mergeAcrossPages([
+      { kind: 'paragraph', text: 'As this journey continues, we keep focusing on our key learnings to continue to enrich the', page: 1 },
+      { kind: 'paragraph', text: 'Check-in approach and use it as a foundation.', page: 2 },
+      { kind: 'paragraph', text: 'Next paragraph ends here.', page: 2 },
+      { kind: 'paragraph', text: 'Fresh start on page three', page: 3 },
+      { kind: 'paragraph', text: 'Footer on page four.', page: 4 },
+    ]);
+    expect(merged.map((b) => b.text)).toEqual([
+      'As this journey continues, we keep focusing on our key learnings to continue to enrich the Check-in approach and use it as a foundation.',
+      'Next paragraph ends here.',
+      'Fresh start on page three',
+      'Footer on page four.',
+    ]);
+  });
+
+  it('samotné symboly se nepřekládají', () => {
+    expect(blocksToSegments([{ kind: 'heading', text: '☰' }, { kind: 'paragraph', text: 'Text' }]).map((s) => s.source)).toEqual(['Text']);
+  });
+});
+
+describe('stripAddedPeriod', () => {
+  it('odebere tečku, kterou originál nemá', () => {
+    expect(stripAddedPeriod('1. On-Going Awareness', '1. Neustálé informování.')).toBe('1. Neustálé informování');
+    expect(stripAddedPeriod('Sign In', 'Přihlásit se.')).toBe('Přihlásit se');
+  });
+
+  it('tečku originálu a tři tečky nechá', () => {
+    expect(stripAddedPeriod('It works.', 'Funguje to.')).toBe('Funguje to.');
+    expect(stripAddedPeriod('and', 'a...')).toBe('a...');
+  });
+});
+
+describe('sentenceChunks', () => {
+  it('dělí dlouhý odstavec po větách, větu nikdy nepůlí', () => {
+    const text = 'First sentence is here. Second one follows! Third? 4th starts with a digit. "Quoted" ends it.';
+    const chunks = sentenceChunks(text, 50);
+    expect(chunks.join(' ')).toBe(text);
+    expect(chunks.every((c) => c.length <= 50 || !c.includes('. '))).toBe(true);
+    expect(chunks.length).toBeGreaterThan(1);
+  });
+
+  it('zkratky uprostřed věty (e.g. 3.5) nerozdělí', () => {
+    expect(sentenceChunks('Values rose by 3.5 percent in total.', 10)).toEqual(['Values rose by 3.5 percent in total.']);
   });
 });
