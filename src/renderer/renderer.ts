@@ -233,8 +233,11 @@ function renderHistory() {
   $('history-empty').hidden = list.length > 0;
 }
 
+const applyTheme = () => (document.documentElement.dataset.theme = settings.theme);
+
 function onSettingsSaved(next: Settings) {
   settings = next;
+  applyTheme();
   renderModes();
   void refreshStatus();
 }
@@ -244,6 +247,7 @@ function onSettingsSaved(next: Settings) {
 async function init() {
   document.body.classList.add(`platform-${window.api.platform}`);
   settings = await window.api.getSettings();
+  applyTheme();
   jobs = new Map((await window.api.listJobs()).map((j) => [j.id, j]));
 
   for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item')) {

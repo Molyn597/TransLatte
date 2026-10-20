@@ -5,7 +5,7 @@ import type { GlossaryEntry, Job, Segment, Settings } from '../shared/types';
 export const DEFAULT_SETTINGS: Settings = {
   apiUrl: 'http://localhost:1234',
   models: { ocr: 'unlimited-ocr', translate: 'translategemma-12b-it', polish: 'google/gemma-4-12b-qat' },
-  mode: 'quality',
+  mode: 'fast',
   sourceLang: 'auto',
   targetLang: 'cs',
   notify: true,

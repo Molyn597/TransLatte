@@ -113,7 +113,12 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
   }
 
   const theme = h('select');
-  for (const [value, label] of [['system', 'Podle systému'], ['light', 'Světlý'], ['dark', 'Tmavý']] as [Theme, string][]) {
+  for (const [value, label] of [
+    ['system', 'Podle systému'],
+    ['light', 'Světlý'],
+    ['dark', 'Tmavý'],
+    ['mono', 'Černobílý (vysoký kontrast)'],
+  ] as [Theme, string][]) {
     theme.append(h('option', { value, selected: settings.theme === value }, label));
   }
   theme.addEventListener('change', () => {

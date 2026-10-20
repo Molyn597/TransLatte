@@ -2,7 +2,8 @@ export type Mode = 'fast' | 'balanced' | 'quality';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
 export type Stage = 'prepare' | 'extract' | 'ocr' | 'tables' | 'translate' | 'polish' | 'glossary' | 'write';
 export type SegmentKind = 'heading' | 'paragraph' | 'list' | 'table';
-export type Theme = 'system' | 'light' | 'dark';
+/** mono = černobílý vysoký kontrast (vždy světlý podklad). */
+export type Theme = 'system' | 'light' | 'dark' | 'mono';
 
 export interface Segment {
   id: number;

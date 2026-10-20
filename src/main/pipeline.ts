@@ -4,6 +4,7 @@ import mammoth from 'mammoth';
 import { detect } from 'tinyld';
 import { isSupported } from '../shared/languages';
 import type { GlossaryEntry, Job, Progress, Rates, Segment, Settings, Stage } from '../shared/types';
+import { documentOrder, rewriteDates, type DateOrder } from './dates';
 import { buildDocx } from './docx';
 import { chat, complete, ensureModel, ensureServer, isVisionModel } from './lmstudio';
 import { closePdf, openPdf, pageText, renderPage } from './pdf';
@@ -326,25 +327,35 @@ const looksWrong = (source: string, out: string) => !out || suspiciousLength(sou
 interface Unit {
   seg: Segment;
   source: string;
+  /** Zdroj s daty přepsanými na jednoznačný tvar; tohle dostane překladač i redaktor. */
+  prepared: string;
   translation?: string;
   polished?: string;
 }
 
 const LONG_PARAGRAPH = 900;
 
-function toUnits(segments: Segment[]): Unit[] {
+function addNotes(seg: Segment, notes: string[]) {
+  if (notes.length) seg.warning = [seg.warning, ...notes].filter(Boolean).join(' ');
+}
+
+function toUnits(ctx: JobContext, segments: Segment[], order: DateOrder | undefined): Unit[] {
+  const { sourceLang, targetLang } = ctx.job;
   return segments
     .filter((s) => s.kind !== 'table')
-    .flatMap((seg) =>
-      seg.kind === 'paragraph' && seg.source.length > LONG_PARAGRAPH
-        ? sentenceChunks(seg.source, LONG_PARAGRAPH).map((source) => ({ seg, source }))
-        : [{ seg, source: seg.source }],
-    );
+    .flatMap((seg) => {
+      const parts = seg.kind === 'paragraph' && seg.source.length > LONG_PARAGRAPH ? sentenceChunks(seg.source, LONG_PARAGRAPH) : [seg.source];
+      return parts.map((source) => {
+        const { text, notes } = rewriteDates(source, sourceLang, targetLang, order);
+        addNotes(seg, notes);
+        return { seg, source, prepared: text };
+      });
+    });
 }
 
 const unitGroups = (units: Unit[]) =>
   groupSegments(
-    units.map((u, id) => ({ id, kind: u.seg.kind, source: u.source })),
+    units.map((u, id) => ({ id, kind: u.seg.kind, source: u.prepared })),
     BATCH_CHARS,
   ).map((g) => g.map((i) => units[i]));
 
@@ -355,7 +366,9 @@ const joinUnits = (units: Unit[], seg: Segment, pick: (u: Unit) => string) =>
     .join(' ');
 
 async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta): Promise<Unit[]> {
-  const units = toUnits(segments);
+  // Pořadí den/měsíc platí pro celý dokument („25/12/2014“ jinde rozhodne i „03/10/2014“).
+  const order = documentOrder(segments.map((s) => s.source));
+  const units = toUnits(ctx, segments, order);
   const total = segments.reduce((n, s) => n + s.source.length, 0);
   let done = 0;
   const report = (chars: number) => {
@@ -368,18 +381,20 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta): Pro
     ...segments
       .filter((s) => s.kind === 'table')
       .map((table) => async () => {
-        table.translation = await translateTable(ctx, table.source);
+        const { text, notes } = rewriteDates(table.source, ctx.job.sourceLang, ctx.job.targetLang, order);
+        addNotes(table, notes);
+        table.translation = await translateTable(ctx, text);
         report(table.source.length);
       }),
     ...unitGroups(units).map((items) => async () => {
       check(ctx.signal);
-      const parts = splitBatch(await translateText(ctx, items.map((u) => u.source).join('\n\n')), items.length);
+      const parts = splitBatch(await translateText(ctx, items.map((u) => u.prepared).join('\n\n')), items.length);
       for (const [i, u] of items.entries()) {
         // Dávka se nerozdělila na stejný počet odstavců nebo část vypadá useknutě: přeložit zvlášť.
-        if (parts && !looksWrong(u.source, parts[i])) u.translation = parts[i];
+        if (parts && !looksWrong(u.prepared, parts[i])) u.translation = parts[i];
         else {
-          u.translation = await translateText(ctx, u.source);
-          if (looksWrong(u.source, u.translation)) u.seg.warning ??= 'Překlad tohoto odstavce může být neúplný.';
+          u.translation = await translateText(ctx, u.prepared);
+          if (looksWrong(u.prepared, u.translation)) addNotes(u.seg, ['Překlad tohoto odstavce může být neúplný.']);
         }
       }
       report(items.reduce((n, u) => n + u.source.length, 0));
@@ -417,12 +432,12 @@ async function polishAll(ctx: JobContext, segments: Segment[], units: Unit[], et
   ctx.progress({ stage: 'polish', done, total, eta: eta.remaining('polish', done, total) });
   await eachParallel(groups, PARALLEL, async (items) => {
     check(ctx.signal);
-    const source = items.map((u) => u.source).join('\n\n');
+    const source = items.map((u) => u.prepared).join('\n\n');
     const translation = items.map((u) => u.translation ?? '').join('\n\n');
     const parts = splitBatch(await polishText(ctx, source, translation, relevantGlossary(source, ctx.glossary)), items.length);
     for (const [i, u] of items.entries()) {
       let polished = parts?.[i];
-      if (!polished) polished = await polishText(ctx, u.source, u.translation ?? '', relevantGlossary(u.source, ctx.glossary));
+      if (!polished) polished = await polishText(ctx, u.prepared, u.translation ?? '', relevantGlossary(u.prepared, ctx.glossary));
       u.polished = polishOk(u.translation ?? '', polished) ? polished : u.translation;
     }
     done += items.reduce((n, u) => n + u.source.length, 0);

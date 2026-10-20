@@ -123,7 +123,7 @@ function setMenu() {
 }
 
 function applyTheme(theme: Settings['theme']) {
-  nativeTheme.themeSource = theme;
+  nativeTheme.themeSource = theme === 'mono' ? 'light' : theme;
   if (!isMac && win) win.setTitleBarOverlay({ ...TITLE_BAR[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'], height: 36 });
 }
 

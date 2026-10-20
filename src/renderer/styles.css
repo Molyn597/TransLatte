@@ -47,6 +47,48 @@
   }
 }
 
+/* Černobílý režim: čistě černý text na bílém, barvy nahrazené odstíny šedi. */
+:root[data-theme='mono'] {
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-border: #000000;
+  --pill: #ffffff;
+  --text: #000000;
+  --muted: #333333;
+  --faint: #777777;
+  --line: #9a9a9a;
+  --strong: #000000;
+  --on-strong: #ffffff;
+  --accent: #000000;
+  --accent-soft: #e6e6e6;
+  --accent-text: #000000;
+  --danger: #000000;
+  --danger-soft: #e6e6e6;
+  --success: #000000;
+  --success-soft: #ffffff;
+  --warning: #000000;
+  --warning-soft: #eeeeee;
+  --shadow: none;
+  color-scheme: light;
+}
+
+:root[data-theme='mono'] .brand-mark,
+:root[data-theme='mono'] .pdf-pages canvas {
+  filter: grayscale(1);
+}
+
+:root[data-theme='mono'] .compare-cell.has-warning,
+:root[data-theme='mono'] .chip.warn,
+:root[data-theme='mono'] .chip.err,
+:root[data-theme='mono'] .error-box {
+  outline: 1px solid #000000;
+  outline-offset: -1px;
+}
+
+:root[data-theme='mono'] .warning-note {
+  font-weight: 600;
+}
+
 * {
   box-sizing: border-box;
 }

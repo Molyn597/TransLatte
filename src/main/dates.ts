@@ -1,0 +1,61 @@
+import { languageName } from '../shared/languages';
+
+export type DateOrder = 'MDY' | 'DMY';
+
+// Datum se čtyřmístným rokem; číslo verze ani desetinné číslo tomu neodpovídá.
+const NUMERIC = /(?<![\d.\/-])(\d{1,2})([-/.])(\d{1,2})\2(\d{4})(?![\d\/-]|\.\d)/g;
+const ISO = /(?<![\d.\/-])(\d{4})-(\d{2})-(\d{2})(?![\d\/-]|\.\d)/g;
+
+/** Angličtina (USA) píše měsíc první, ostatní jazyky den. */
+const languageOrder = (lang: string): DateOrder => (lang === 'en' ? 'MDY' : 'DMY');
+
+/**
+ * Pořadí dne a měsíce pro celý dokument: rozhodne datum, kde je jedno číslo větší než 12.
+ * Když žádné takové není, platí zvyklost jazyka (undefined = rozhodla jen zvyklost).
+ */
+export function documentOrder(texts: string[]): DateOrder | undefined {
+  let mdy = 0;
+  let dmy = 0;
+  for (const text of texts) {
+    for (const [, a, , b] of text.matchAll(NUMERIC)) {
+      if (Number(a) > 12 && Number(b) <= 12) dmy++;
+      if (Number(b) > 12 && Number(a) <= 12) mdy++;
+    }
+  }
+  if (mdy === dmy) return undefined;
+  return mdy > dmy ? 'MDY' : 'DMY';
+}
+
+function valid(year: number, month: number, day: number) {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+}
+
+const longDate = (lang: string, year: number, month: number, day: number) =>
+  new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(
+    Date.UTC(year, month - 1, day),
+  );
+
+/**
+ * Přepíše číselná data na tvar s názvem měsíce ve zdrojovém jazyce („March 10, 2014“),
+ * který překladový model přeloží správně. Nejednoznačná data (rozhodla jen zvyklost jazyka) vrátí v `notes`.
+ */
+export function rewriteDates(text: string, source: string, target: string, docOrder?: DateOrder) {
+  const notes: string[] = [];
+  const order = docOrder ?? languageOrder(source);
+  let out = text.replace(NUMERIC, (match, a: string, _sep: string, b: string, y: string) => {
+    const [first, second, year] = [Number(a), Number(b), Number(y)];
+    let [month, day] = order === 'MDY' ? [first, second] : [second, first];
+    if (month > 12 && day <= 12) [month, day] = [day, month]; // samo datum je jednoznačné
+    if (!valid(year, month, day)) return match;
+    if (first <= 12 && second <= 12 && first !== second && !docOrder) {
+      const how = order === 'MDY' ? 'měsíc/den, zvyklost USA' : 'den/měsíc';
+      notes.push(`Datum ${match} čteno jako ${longDate(target, year, month, day)} (${how}, ${languageName(source)}). Zkontroluj ho.`);
+    }
+    return longDate(source, year, month, day);
+  });
+  out = out.replace(ISO, (match, y: string, m: string, d: string) =>
+    valid(Number(y), Number(m), Number(d)) ? longDate(source, Number(y), Number(m), Number(d)) : match,
+  );
+  return { text: out, notes };
+}
