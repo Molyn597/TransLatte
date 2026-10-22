@@ -1,3 +1,4 @@
+import { locale, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import type { Job, Mode, Stage } from '../shared/types';
 
@@ -17,6 +18,17 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   }
   for (const child of children) if (child) el.append(child);
   return el;
+}
+
+/**
+ * Statické texty z index.html: `data-i18n` nastaví text, `data-i18n-placeholder`, `-title` a `-aria-label` atribut.
+ */
+export function applyI18n(root: ParentNode = document) {
+  for (const el of root.querySelectorAll<HTMLElement>('[data-i18n]')) el.textContent = t(el.dataset.i18n as MessageKey);
+  for (const attr of ['placeholder', 'title', 'aria-label']) {
+    const data = `i18n${attr.replace(/(^|-)(\w)/g, (_, _d, c: string) => c.toUpperCase())}`;
+    for (const el of root.querySelectorAll<HTMLElement>(`[data-i18n-${attr}]`)) el.setAttribute(attr, t(el.dataset[data] as MessageKey));
+  }
 }
 
 /** Statické ikony z tohoto souboru (nikdy ne obsah z dokumentu). */
@@ -43,23 +55,23 @@ export const ICONS = {
   arrow: '<path d="M5 12h14M13 6l6 6-6 6" />',
 };
 
-export const MODES: Record<Mode, { title: string; desc: string }> = {
-  fast: { title: 'Rychlý', desc: 'Text z PDF, OCR jen u skenů. Chyby jen označí.' },
-  balanced: { title: 'Vyvážený', desc: 'OCR všech stránek, kontrola a oprava chyb.' },
-  quality: { title: 'Kvalitní', desc: 'Navíc kontext dokumentu (téma, autor) pro přesnější opravy.' },
+export const MODES: Record<Mode, { title: MessageKey; desc: MessageKey }> = {
+  fast: { title: 'mode.fast.title', desc: 'mode.fast.desc' },
+  balanced: { title: 'mode.balanced.title', desc: 'mode.balanced.desc' },
+  quality: { title: 'mode.quality.title', desc: 'mode.quality.desc' },
 };
 
-export const STAGES: Record<Stage, string> = {
-  prepare: 'Připravuji LM Studio',
-  extract: 'Čtu dokument',
-  ocr: 'Čtu stránky (OCR)',
-  tables: 'Čtu tabulky',
-  context: 'Čtu kontext dokumentu',
-  translate: 'Překládám',
-  check: 'Kontroluji překlad',
-  fix: 'Opravuji chyby',
-  write: 'Ukládám výsledek',
-  layout: 'Skládám PDF',
+export const STAGES: Record<Stage, MessageKey> = {
+  prepare: 'stage.prepare',
+  extract: 'stage.extract',
+  ocr: 'stage.ocr',
+  tables: 'stage.tables',
+  context: 'stage.context',
+  translate: 'stage.translate',
+  check: 'stage.check',
+  fix: 'stage.fix',
+  write: 'stage.write',
+  layout: 'stage.layout',
 };
 
 export function duration(seconds: number) {
@@ -72,7 +84,7 @@ export function duration(seconds: number) {
 }
 
 export function date(ms: number) {
-  return new Date(ms).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleString(locale(), { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 export function jobDuration(job: Job) {
@@ -80,38 +92,38 @@ export function jobDuration(job: Job) {
 }
 
 export function langPair(job: Job) {
-  const src = job.sourceLang === 'auto' ? 'auto' : languageName(job.sourceLang);
+  const src = job.sourceLang === 'auto' ? t('lang.autoShort') : languageName(job.sourceLang);
   return `${src} → ${languageName(job.targetLang)}`;
 }
 
-export const STATUS_TEXT: Record<Job['status'], string> = {
-  queued: 'Čeká ve frontě',
-  running: 'Překládá se',
-  done: 'Hotovo',
-  error: 'Chyba',
-  cancelled: 'Zrušeno',
+export const STATUS_TEXT: Record<Job['status'], MessageKey> = {
+  queued: 'status.queued',
+  running: 'status.running',
+  done: 'status.done',
+  error: 'status.error',
+  cancelled: 'status.cancelled',
 };
 
 export function statusIcon(job: Job) {
   const map = { done: ICONS.check, error: ICONS.alert, running: ICONS.clock, queued: ICONS.clock, cancelled: ICONS.x };
-  return h('span', { class: `status-icon status-${job.status}`, title: STATUS_TEXT[job.status] }, icon(map[job.status]));
+  return h('span', { class: `status-icon status-${job.status}`, title: t(STATUS_TEXT[job.status]) }, icon(map[job.status]));
 }
 
 /** Průběh úlohy jako text a podíl 0–1 (null = neurčitý). */
 export function progressInfo(job: Job): { label: string; fraction: number | null; eta: string } {
-  if (job.status === 'queued') return { label: 'Čeká ve frontě', fraction: 0, eta: '' };
+  if (job.status === 'queued') return { label: t(STATUS_TEXT.queued), fraction: 0, eta: '' };
   const p = job.progress;
-  if (!p) return { label: 'Spouštím…', fraction: null, eta: '' };
+  if (!p) return { label: t('progress.starting'), fraction: null, eta: '' };
   const counter =
     p.total && p.stage === 'ocr'
-      ? ` · stránka ${Math.min(p.done + 1, p.total)} z ${p.total}`
+      ? ` · ${t('progress.page', { page: Math.min(p.done + 1, p.total), total: p.total })}`
       : p.total
-        ? ` · ${Math.round((p.done / p.total) * 100)} %`
+        ? ` · ${t('common.percent', { percent: Math.round((p.done / p.total) * 100) })}`
         : '';
   return {
-    label: STAGES[p.stage] + counter,
+    label: t(STAGES[p.stage]) + counter,
     fraction: p.total ? p.done / p.total : null,
-    eta: p.eta !== undefined ? `zbývá asi ${duration(p.eta)}` : '',
+    eta: p.eta !== undefined ? t('progress.eta', { time: duration(p.eta) }) : '',
   };
 }
 

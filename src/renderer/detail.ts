@@ -1,4 +1,5 @@
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
+import { locale, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import { PDFJS_OPTIONS } from '../shared/pdf';
 import type { DocumentContext, Job, JobDetail, Mode, Segment, Stage } from '../shared/types';
@@ -26,9 +27,13 @@ const $ = (id: string) => document.getElementById(id)!;
 const finalText = (s: Segment) => s.edited ?? s.polished ?? s.translation ?? '';
 // Citáty jen pro přeložené PDF se ve Srovnání ani v Překladu nezobrazují.
 const visible = (segments: Segment[]) => segments.filter((s) => !s.layoutOnly);
-const GENDER: Record<DocumentContext['authorGender'], string> = { female: 'žena', male: 'muž', unknown: 'rod neznámý' };
+const GENDER: Record<DocumentContext['authorGender'], MessageKey> = {
+  female: 'detail.gender.female',
+  male: 'detail.gender.male',
+  unknown: 'detail.gender.unknown',
+};
 // Fáze ze starších úloh (celotextové uhlazení), aby jejich doba měla v Informacích popisek.
-const OLD_STAGES: Record<string, string> = { polish: 'Uhlazuji text', glossary: 'Kontroluji glosář' };
+const OLD_STAGES: Record<string, MessageKey> = { polish: 'stage.polish', glossary: 'stage.glossary' };
 
 let current: JobDetail | null = null;
 let tab: Tab = 'compare';
@@ -42,14 +47,14 @@ const PAIR_GAP = 14;
 
 function meta(job: Job) {
   const chips = [
-    h('span', { class: job.status === 'error' ? 'chip err' : 'chip' }, STATUS_TEXT[job.status]),
-    h('span', { class: 'chip' }, MODES[job.mode].title),
+    h('span', { class: job.status === 'error' ? 'chip err' : 'chip' }, t(STATUS_TEXT[job.status])),
+    h('span', { class: 'chip' }, t(MODES[job.mode].title)),
     h('span', { class: 'chip' }, langPair(job)),
     h('span', { class: 'chip' }, date(job.createdAt)),
   ];
-  if (job.pages) chips.push(h('span', { class: 'chip' }, `${job.pages} str.`));
+  if (job.pages) chips.push(h('span', { class: 'chip' }, t('detail.pages', { count: job.pages })));
   if (jobDuration(job)) chips.push(h('span', { class: 'chip' }, jobDuration(job)));
-  if (job.warnings) chips.push(h('span', { class: 'chip warn' }, `${job.warnings}× upozornění`));
+  if (job.warnings) chips.push(h('span', { class: 'chip warn' }, t('job.warnings', { count: job.warnings })));
   return chips;
 }
 
@@ -64,17 +69,17 @@ function retryMenu(job: Job) {
           onclick: async () => {
             menu.hidden = true;
             await window.api.retryJob(job.id, mode);
-            toast(`Přidáno do fronty: ${job.name} (${MODES[mode].title})`);
+            toast(t('detail.retryQueued', { name: job.name, mode: t(MODES[mode].title) }));
           },
         },
-        `${MODES[mode].title} režim`,
+        t('mode.suffix', { mode: t(MODES[mode].title) }),
       ),
     );
   }
   const button = h('button', { class: 'btn', onclick: (e: Event) => {
     e.stopPropagation();
     menu.hidden = !menu.hidden;
-  } }, icon(ICONS.retry), 'Přeložit znovu');
+  } }, icon(ICONS.retry), t('detail.retry'));
   wrap.append(button, menu);
   return wrap;
 }
@@ -82,17 +87,17 @@ function retryMenu(job: Job) {
 function actions(job: Job) {
   const list: HTMLElement[] = [];
   if (job.status === 'running' || job.status === 'queued') {
-    list.push(h('button', { class: 'btn danger', onclick: () => window.api.cancelJob(job.id) }, icon(ICONS.stop), 'Zrušit'));
+    list.push(h('button', { class: 'btn danger', onclick: () => window.api.cancelJob(job.id) }, icon(ICONS.stop), t('job.cancel')));
     return list;
   }
   if (job.status === 'done') {
     if (job.outputPdf) {
-      list.push(h('button', { class: 'btn primary', onclick: () => window.api.openOutput(job.id, 'pdf') }, icon(ICONS.file), 'Otevřít PDF'));
+      list.push(h('button', { class: 'btn primary', onclick: () => window.api.openOutput(job.id, 'pdf') }, icon(ICONS.file), t('detail.openPdf')));
     }
     list.push(
-      h('button', { class: job.outputPdf ? 'btn' : 'btn primary', onclick: () => window.api.openOutput(job.id, 'docx') }, icon(ICONS.file), 'Otevřít Word'),
-      h('button', { class: 'btn', onclick: () => window.api.saveOutputAs(job.id) }, icon(ICONS.download), 'Uložit jako…'),
-      h('button', { class: 'btn', onclick: () => window.api.revealOutput(job.id) }, icon(ICONS.folder), 'Ve složce'),
+      h('button', { class: job.outputPdf ? 'btn' : 'btn primary', onclick: () => window.api.openOutput(job.id, 'docx') }, icon(ICONS.file), t('detail.openWord')),
+      h('button', { class: 'btn', onclick: () => window.api.saveOutputAs(job.id) }, icon(ICONS.download), t('detail.saveAs')),
+      h('button', { class: 'btn', onclick: () => window.api.revealOutput(job.id) }, icon(ICONS.folder), t('detail.reveal')),
     );
   }
   list.push(retryMenu(job));
@@ -101,9 +106,9 @@ function actions(job: Job) {
       'button',
       {
         class: 'btn danger',
-        title: 'Smazat z historie',
+        title: t('detail.delete'),
         onclick: async () => {
-          if (!confirm(`Smazat „${job.name}“ z historie včetně přeloženého souboru?`)) return;
+          if (!confirm(t('detail.confirmDelete', { name: job.name }))) return;
           await window.api.deleteJob(job.id);
         },
       },
@@ -129,14 +134,14 @@ function compareView(segments: Segment[]) {
   const grid = h(
     'div',
     { class: 'compare' },
-    h('div', { class: 'compare-head' }, `Originál (${languageName(current!.job.sourceLang)})`),
-    h('div', { class: 'compare-head' }, `Překlad (${languageName(current!.job.targetLang)})`),
+    h('div', { class: 'compare-head' }, t('detail.originalLang', { lang: languageName(current!.job.sourceLang) })),
+    h('div', { class: 'compare-head' }, t('detail.translationLang', { lang: languageName(current!.job.targetLang) })),
   );
   let page: number | undefined;
   for (const s of segments) {
     if (s.page && s.page !== page && segments.some((x) => x.page && x.page > 1)) {
       page = s.page;
-      grid.append(h('div', { class: 'compare-page' }, `Stránka ${page}`));
+      grid.append(h('div', { class: 'compare-page' }, t('detail.page', { page })));
     }
     const cls = `compare-cell${s.kind === 'heading' ? ' heading' : ''}${s.warning ? ' has-warning' : ''}`;
     grid.append(
@@ -161,14 +166,14 @@ function tableEl(text: string) {
 function documentView(segments: Segment[], text: (s: Segment) => string) {
   const doc = h('article', { class: 'doc' });
   for (const s of segments) {
-    const t = text(s);
-    if (s.kind === 'heading') doc.append(h('h2', {}, t));
+    const body = text(s);
+    if (s.kind === 'heading') doc.append(h('h2', {}, body));
     else if (s.kind === 'list') {
       const ul = h('ul');
-      for (const li of t.split('\n').filter((l) => l.trim())) ul.append(h('li', {}, li.replace(/^\s*([-*•–]|\d+[.)])\s+/, '')));
+      for (const li of body.split('\n').filter((l) => l.trim())) ul.append(h('li', {}, li.replace(/^\s*([-*•–]|\d+[.)])\s+/, '')));
       doc.append(ul);
-    } else if (s.kind === 'table') doc.append(tableEl(t));
-    else doc.append(h('p', {}, t));
+    } else if (s.kind === 'table') doc.append(tableEl(body));
+    else doc.append(h('p', {}, body));
   }
   return doc;
 }
@@ -191,7 +196,7 @@ async function pdfCanvas(pdf: PDFDocumentProxy, number: number, width: number) {
 }
 
 async function pdfView(data: Uint8Array | null, token: number) {
-  const holder = h('div', { class: 'pdf-pages' }, h('p', { class: 'muted' }, 'Načítám PDF…'));
+  const holder = h('div', { class: 'pdf-pages' }, h('p', { class: 'muted' }, t('detail.loadingPdf')));
   if (!data || token !== renderToken) return holder;
   const pdf = await getDocument({ data, ...PDFJS_OPTIONS }).promise;
   holder.replaceChildren();
@@ -223,36 +228,51 @@ async function sideBySideView(detail: JobDetail, token: number) {
   return holder;
 }
 
+const stageName = (stage: string) => {
+  const key = STAGES[stage as Stage] ?? OLD_STAGES[stage];
+  return key ? t(key) : stage;
+};
+
 function infoView(detail: JobDetail) {
   const { job, segments } = detail;
   const dl = h('dl', { class: 'info' });
   const row = (k: string, v: string) => dl.append(h('dt', {}, k), h('dd', {}, v));
-  row('Soubor', `${job.name}${job.ext}`);
-  row('Stav', STATUS_TEXT[job.status]);
-  row('Režim', `${MODES[job.mode].title} – ${MODES[job.mode].desc}`);
-  row('Jazyky', langPair(job));
-  row('Vytvořeno', date(job.createdAt));
-  if (jobDuration(job)) row('Doba zpracování', jobDuration(job));
-  if (job.pages) row('Stránek', job.pageRange ? `${job.pages} (výběr ${job.pageRange})` : String(job.pages));
-  if (job.chars) row('Znaků originálu', job.chars.toLocaleString('cs-CZ'));
-  row('Odstavců', String(visible(segments).length));
-  if (job.output) row('Výstup', job.outputPdf ? `${job.output}, ${job.outputPdf}` : job.output);
+  row(t('detail.info.file'), `${job.name}${job.ext}`);
+  row(t('detail.info.status'), t(STATUS_TEXT[job.status]));
+  row(t('detail.info.mode'), `${t(MODES[job.mode].title)} – ${t(MODES[job.mode].desc)}`);
+  row(t('detail.info.languages'), langPair(job));
+  row(t('detail.info.created'), date(job.createdAt));
+  if (jobDuration(job)) row(t('detail.info.duration'), jobDuration(job));
+  if (job.pages) row(t('detail.info.pages'), job.pageRange ? t('detail.info.pagesSelection', { pages: job.pages, range: job.pageRange }) : String(job.pages));
+  if (job.chars) row(t('detail.info.chars'), job.chars.toLocaleString(locale()));
+  row(t('detail.info.paragraphs'), String(visible(segments).length));
+  if (job.output) row(t('detail.info.output'), job.outputPdf ? `${job.output}, ${job.outputPdf}` : job.output);
   if (job.context) {
     const c = job.context;
-    row('Kontext dokumentu', `${c.topic || 'téma neuvedeno'}; autor: ${c.author || 'neuveden'} (${GENDER[c.authorGender]})`);
+    row(
+      t('detail.info.context'),
+      t('detail.info.contextText', {
+        topic: c.topic || t('detail.info.noTopic'),
+        author: c.author || t('detail.info.noAuthor'),
+        gender: t(GENDER[c.authorGender]),
+      }),
+    );
   }
-  if (job.notes?.length) row('Poznámky', job.notes.join(' '));
+  if (job.notes?.length) row(t('detail.info.notes'), job.notes.join(' '));
   const timings = Object.entries(job.timings ?? {}).filter(([, s]) => s >= 1);
   if (timings.length) {
-    row('Fáze', timings.map(([stage, s]) => `${STAGES[stage as Stage] ?? OLD_STAGES[stage] ?? stage}: ${duration(s)}`).join(' · '));
+    row(
+      t('detail.info.stages'),
+      timings.map(([stage, s]) => `${stageName(stage)}: ${duration(s)}`).join(' · '),
+    );
   }
   const box = h('div', { class: 'view' }, dl);
   if (job.error) box.prepend(h('div', { class: 'error-box' }, job.error));
   const warned = segments.filter((s) => s.warning);
   if (warned.length) {
     const list = h('ul');
-    for (const s of warned) list.append(h('li', {}, `${s.page ? `Str. ${s.page}: ` : ''}${s.warning}`));
-    box.append(h('div', { class: 'setting-group' }, h('h2', {}, 'Upozornění'), list));
+    for (const s of warned) list.append(h('li', {}, s.page ? t('detail.info.warningPage', { page: s.page, text: s.warning! }) : s.warning!));
+    box.append(h('div', { class: 'setting-group' }, h('h2', {}, t('detail.info.warnings')), list));
   }
   return box;
 }
@@ -267,7 +287,7 @@ async function renderBody() {
   const { job, segments } = current;
   if (tab === 'info') return body.replaceChildren(infoView(current));
   if (tab === 'original' || tab === 'translated-pdf' || tab === 'side-by-side') {
-    body.replaceChildren(h('p', { class: 'muted' }, 'Načítám…'));
+    body.replaceChildren(h('p', { class: 'muted' }, t('detail.loading')));
     try {
       const view =
         tab === 'original'
@@ -277,14 +297,14 @@ async function renderBody() {
             : await pdfView(await window.api.readOutputPdf(job.id), token);
       if (token === renderToken) body.replaceChildren(view);
     } catch (e) {
-      const what = tab === 'original' ? 'Originál' : tab === 'side-by-side' ? 'PDF vedle sebe' : 'Přeložené PDF';
-      if (token === renderToken) body.replaceChildren(h('div', { class: 'error-box' }, `${what} nejde zobrazit: ${(e as Error).message}`));
+      const what = tab === 'original' ? 'detail.tab.original' : tab === 'side-by-side' ? 'detail.tab.sideBySide' : 'detail.translatedPdf';
+      if (token === renderToken) body.replaceChildren(h('div', { class: 'error-box' }, t('detail.cannotShow', { what: t(what), error: (e as Error).message })));
     }
     return;
   }
   if (!segments.length) {
     const text =
-      job.status === 'done' ? 'Dokument neobsahuje žádný text.' : job.status === 'error' ? job.error ?? 'Chyba' : 'Výsledek se objeví, až překlad doběhne.';
+      job.status === 'done' ? t('detail.noText') : job.status === 'error' ? (job.error ?? t('status.error')) : t('detail.pending');
     return body.replaceChildren(h('p', { class: job.status === 'error' ? 'error-box' : 'empty' }, text));
   }
   body.replaceChildren(tab === 'compare' ? compareView(visible(segments)) : documentView(visible(segments), finalText));

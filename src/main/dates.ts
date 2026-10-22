@@ -1,3 +1,4 @@
+import { t } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 
 export type DateOrder = 'MDY' | 'DMY';
@@ -74,8 +75,8 @@ export function rewriteDates(text: string, source: string, target: string, docOr
     if (month > 12 && day <= 12) [month, day] = [day, month]; // samo datum je jednoznačné
     if (!valid(year, month, day)) return match;
     if (first <= 12 && second <= 12 && first !== second && !docOrder) {
-      const how = order === 'MDY' ? 'měsíc/den, zvyklost USA' : 'den/měsíc';
-      notes.push(`Datum ${match} čteno jako ${longDate(target, year, month, day)} (${how}, ${languageName(source)}). Zkontroluj ho.`);
+      const how = t(order === 'MDY' ? 'dates.monthDay' : 'dates.dayMonth');
+      notes.push(t('dates.ambiguous', { date: match, read: longDate(target, year, month, day), how, lang: languageName(source) }));
     }
     return longDate(source, year, month, day);
   });

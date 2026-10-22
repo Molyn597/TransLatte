@@ -1,3 +1,5 @@
+import { getLang } from './i18n';
+
 // Jazyky, které TranslateGemma podporuje a které nabízíme v UI (kód ISO 639-1).
 export const LANGUAGES: { code: string; name: string; english: string }[] = [
   { code: 'cs', name: 'čeština', english: 'Czech' },
@@ -28,6 +30,10 @@ export const LANGUAGES: { code: string; name: string; english: string }[] = [
   { code: 'ko', name: 'korejština', english: 'Korean' },
 ];
 
-export const languageName = (code: string) => LANGUAGES.find((l) => l.code === code)?.name ?? code;
+/** Název jazyka v jazyce rozhraní. */
+export const languageName = (code: string) => {
+  const language = LANGUAGES.find((l) => l.code === code);
+  return language ? (getLang() === 'en' ? language.english : language.name) : code;
+};
 export const englishName = (code: string) => LANGUAGES.find((l) => l.code === code)?.english ?? code;
 export const isSupported = (code: string) => LANGUAGES.some((l) => l.code === code);

@@ -13,6 +13,7 @@ import {
   Tray,
   type MenuItemConstructorOptions,
 } from 'electron';
+import { resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, Settings, Stage } from '../shared/types';
 import { status } from './lmstudio';
@@ -24,17 +25,17 @@ const TITLE_BAR = {
   light: { color: '#f3ede6', symbolColor: '#2b211b' },
   dark: { color: '#17130f', symbolColor: '#f1e9df' },
 };
-const STAGE_LABEL: Record<Stage, string> = {
-  prepare: 'Připravuji',
-  extract: 'Čtu dokument',
-  ocr: 'OCR',
-  tables: 'Tabulky',
-  context: 'Kontext',
-  translate: 'Překládám',
-  check: 'Kontrola',
-  fix: 'Opravy',
-  write: 'Ukládám',
-  layout: 'PDF',
+const STAGE_LABEL: Record<Stage, MessageKey> = {
+  prepare: 'tray.stage.prepare',
+  extract: 'tray.stage.extract',
+  ocr: 'tray.stage.ocr',
+  tables: 'tray.stage.tables',
+  context: 'tray.stage.context',
+  translate: 'tray.stage.translate',
+  check: 'tray.stage.check',
+  fix: 'tray.stage.fix',
+  write: 'tray.stage.write',
+  layout: 'tray.stage.layout',
 };
 
 if (process.env.TRANSLATTE_USER_DATA) app.setPath('userData', process.env.TRANSLATTE_USER_DATA);
@@ -59,10 +60,12 @@ const queue = new Queue(store, {
     if (!settings.notify || !Notification.isSupported()) return;
     if (job.status !== 'done' && job.status !== 'error') return;
     const n = new Notification({
-      title: job.status === 'done' ? 'Přeloženo' : 'Překlad se nepovedl',
+      title: job.status === 'done' ? t('notify.done') : t('notify.failed'),
       body:
         job.status === 'done'
-          ? `${job.name} → ${languageName(job.targetLang)}${job.warnings ? ` (${job.warnings}× upozornění)` : ''}`
+          ? job.warnings
+            ? t('notify.doneWarnings', { name: job.name, lang: languageName(job.targetLang), count: job.warnings })
+            : t('notify.doneBody', { name: job.name, lang: languageName(job.targetLang) })
           : `${job.name}: ${job.error ?? ''}`.slice(0, 200),
       silent: false,
     });
@@ -90,18 +93,22 @@ function updateProgressUi() {
   win?.setProgressBar(running ? (fraction < 0 ? 2 : fraction) : -1);
   if (!tray) return;
   const waiting = [...active.values()].filter((j) => j.status === 'queued').length;
+  const percent = t('common.percent', { percent: Math.round(fraction * 100) });
+  const stage = running && t(STAGE_LABEL[running.progress?.stage ?? 'prepare']);
   const label = running
-    ? `${STAGE_LABEL[running.progress?.stage ?? 'prepare']}: ${running.name}${fraction >= 0 ? ` ${Math.round(fraction * 100)} %` : ''}`
-    : 'Nic se nepřekládá';
-  if (isMac) tray.setTitle(running && fraction >= 0 ? `${Math.round(fraction * 100)} %` : '');
+    ? fraction >= 0
+      ? t('tray.runningPercent', { stage: stage!, name: running.name, percent })
+      : t('tray.running', { stage: stage!, name: running.name })
+    : t('tray.idle');
+  if (isMac) tray.setTitle(running && fraction >= 0 ? percent : '');
   tray.setToolTip(`TransLatte – ${label}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label, enabled: false },
-      ...(waiting ? [{ label: `Ve frontě: ${waiting}`, enabled: false }] : []),
+      ...(waiting ? [{ label: t('tray.waiting', { count: waiting }), enabled: false }] : []),
       { type: 'separator' },
-      { label: 'Otevřít TransLatte', click: showWindow },
-      { label: 'Ukončit', click: () => app.quit() },
+      { label: t('tray.open'), click: showWindow },
+      { label: t('tray.quit'), click: () => app.quit() },
     ]),
   );
 }
@@ -120,13 +127,19 @@ function setMenu() {
   const template: MenuItemConstructorOptions[] = [];
   if (isMac) template.push({ role: 'appMenu' });
   template.push({ role: 'editMenu' });
-  if (!app.isPackaged) template.push({ label: 'Vývoj', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }] });
+  if (!app.isPackaged) template.push({ label: t('menu.dev'), submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }] });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function applyTheme(theme: Settings['theme']) {
   nativeTheme.themeSource = theme === 'mono' ? 'light' : theme;
   if (!isMac && win) win.setTitleBarOverlay({ ...TITLE_BAR[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'], height: 36 });
+}
+
+function applyLang(uiLang: Settings['uiLang']) {
+  setLang(resolveLang(uiLang, app.getLocale()));
+  setMenu();
+  updateProgressUi();
 }
 
 function showWindow() {
@@ -177,6 +190,7 @@ function registerIpc() {
   ipcMain.handle('settings-save', async (_e, settings: Settings) => {
     await store.saveSettings(settings);
     applyTheme(settings.theme);
+    applyLang(settings.uiLang);
   });
   ipcMain.handle('glossary', () => store.glossary());
   ipcMain.handle('glossary-save', (_e, entries: GlossaryEntry[]) => store.saveGlossary(entries));
@@ -187,7 +201,7 @@ function registerIpc() {
   ipcMain.handle('pick-files', async () => {
     const res = await dialog.showOpenDialog(win!, {
       properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'Dokumenty', extensions: SUPPORTED.map((e) => e.slice(1)) }],
+      filters: [{ name: t('dialog.documents'), extensions: SUPPORTED.map((e) => e.slice(1)) }],
     });
     return res.canceled ? [] : res.filePaths;
   });
@@ -259,10 +273,12 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     app.setName('TransLatte');
     if (isMac) app.dock?.setIcon(path.join(__dirname, 'icon.png'));
+    const settings = await store.settings();
+    setLang(resolveLang(settings.uiLang, app.getLocale()));
     setMenu();
     registerIpc();
     await queue.recover();
-    applyTheme((await store.settings()).theme);
+    applyTheme(settings.theme);
     createWindow();
     createTray();
   });

@@ -1,3 +1,5 @@
+import type { UiLangSetting } from './i18n';
+
 export type Mode = 'fast' | 'balanced' | 'quality';
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
 export type Stage = 'prepare' | 'extract' | 'ocr' | 'tables' | 'context' | 'translate' | 'check' | 'fix' | 'write' | 'layout';
@@ -128,6 +130,8 @@ export interface Rates {
 }
 
 export interface Settings {
+  /** Jazyk rozhraní aplikace (ne překladu). */
+  uiLang: UiLangSetting;
   apiUrl: string;
   models: Models;
   mode: Mode;

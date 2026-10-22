@@ -1,3 +1,4 @@
+import { t } from '../shared/i18n';
 import type { DocumentContext, GlossaryEntry, Mode, Segment } from '../shared/types';
 import { fixPrepositions, untranslatedWords } from './czech';
 import { fixCzechMonths } from './dates';
@@ -7,9 +8,10 @@ export type IssueKind = 'spelling' | 'untranslated' | 'glossary' | 'suspicious' 
 
 export interface Issue {
   kind: IssueKind;
-  /** Český popis pro upozornění v UI i pro korektora. */
+  /** Popis pro upozornění v UI (v jazyce rozhraní). */
   text: string;
-  /** Totéž anglicky pro korektora u jiných cílových jazyků než čeština. */
+  /** Pro korektora česky (cílová čeština) a anglicky (jiné cílové jazyky); nezávisí na jazyce rozhraní. */
+  cs: string;
   en: string;
   /** Počet chyb (slov, termínů), podle něj se posuzuje, jestli oprava pomohla. */
   count: number;
@@ -71,7 +73,8 @@ export function findIssues(
   if (cs && misspelled.length) {
     issues.push({
       kind: 'spelling',
-      text: `Pravděpodobné překlepy: ${list(misspelled)}.`,
+      text: t('review.misspelled', { words: list(misspelled) }),
+      cs: `Pravděpodobné překlepy: ${list(misspelled)}.`,
       en: `Probable typos: ${list(misspelled)}.`,
       count: misspelled.length,
     });
@@ -82,7 +85,8 @@ export function findIssues(
     if (words.length >= 2) {
       issues.push({
         kind: 'untranslated',
-        text: `Nepřeložená anglická slova: ${list(words)}.`,
+        text: t('review.untranslated', { words: list(words) }),
+        cs: `Nepřeložená anglická slova: ${list(words)}.`,
         en: `Untranslated English words: ${list(words)}.`,
         count: words.length,
       });
@@ -93,19 +97,21 @@ export function findIssues(
   if (missing.length) {
     issues.push({
       kind: 'glossary',
-      text: `Chybí termín z glosáře: ${list(missing)}.`,
+      text: t('review.glossaryMissing', { terms: list(missing) }),
+      cs: `Chybí termín z glosáře: ${list(missing)}.`,
       en: `Missing glossary term: ${list(missing)}.`,
       count: missing.length,
     });
   }
 
   if (hasRepetition(translation)) {
-    issues.push({ kind: 'suspicious', text: 'Překlad obsahuje opakující se text.', en: 'The translation contains repeated text.', count: 1 });
+    issues.push({ kind: 'suspicious', text: t('review.repeated'), cs: 'Překlad obsahuje opakující se text.', en: 'The translation contains repeated text.', count: 1 });
   } else if (suspiciousLength(seg.source, translation)) {
     const short = translation.length < seg.source.length;
     issues.push({
       kind: 'suspicious',
-      text: `Překlad je podezřele ${short ? 'krátký' : 'dlouhý'} vůči originálu (může být neúplný nebo vymyšlený).`,
+      text: t(short ? 'review.tooShort' : 'review.tooLong'),
+      cs: `Překlad je podezřele ${short ? 'krátký' : 'dlouhý'} vůči originálu (může být neúplný nebo vymyšlený).`,
       en: `The translation is suspiciously ${short ? 'short' : 'long'} compared to the original (possibly incomplete or invented).`,
       count: 1,
     });
@@ -114,10 +120,12 @@ export function findIssues(
   if (cs && o.mode === 'quality' && o.context) {
     const wrong = wrongGender(translation, o.context.authorGender);
     if (wrong.length) {
+      const words = wrong.map((w) => `„${w}“`).join(', ');
       const [author, used] = o.context.authorGender === 'female' ? ['žena', 'mužský'] : ['muž', 'ženský'];
       issues.push({
         kind: 'gender',
-        text: `Autor je ${author}, ale překlad používá ${used} rod: ${wrong.map((w) => `„${w}“`).join(', ')}.`,
+        text: t(o.context.authorGender === 'female' ? 'review.genderFemale' : 'review.genderMale', { words }),
+        cs: `Autor je ${author}, ale překlad používá ${used} rod: ${words}.`,
         en: '',
         count: wrong.length,
       });

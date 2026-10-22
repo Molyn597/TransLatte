@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { BrowserWindow, ipcMain } from 'electron';
+import { t } from '../shared/i18n';
 import type { PdfOpenResult, PdfRenderResult, PdfTask, PdfTextResult } from '../shared/pdf';
 
 let host: BrowserWindow | undefined;
@@ -27,7 +28,7 @@ function ensureHost() {
     },
   });
   host.webContents.on('render-process-gone', () => {
-    for (const p of pending.values()) p.reject(new Error('Okno pro PDF spadlo.'));
+    for (const p of pending.values()) p.reject(new Error(t('pdf.windowCrashed')));
     pending.clear();
     host = undefined;
   });

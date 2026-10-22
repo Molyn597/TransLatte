@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import nspell from 'nspell';
+import { t } from '../shared/i18n';
 
 // Slovník (GPL-2.0) se nebalí do aplikace, stáhne se až při prvním použití.
 const DICTIONARY_URL = 'https://registry.npmjs.org/dictionary-cs/-/dictionary-cs-4.0.0.tgz';
@@ -25,7 +26,7 @@ export function unpackTgz(tgz: Buffer): Map<string, Buffer> {
     const prefix = field(header, 257, 6).startsWith('ustar') ? field(header, 345, 155) : '';
     const name = (prefix ? `${prefix}/` : '') + field(header, 0, 100);
     const start = offset + 512;
-    if (start + size > tar.length) throw new Error('Archiv se slovníkem je poškozený.');
+    if (start + size > tar.length) throw new Error(t('spell.archiveCorrupt'));
     if (type === '0' || type === '\0') files.set(name, tar.subarray(start, start + size));
     offset = start + Math.ceil(size / 512) * 512;
   }
@@ -54,18 +55,18 @@ export async function ensureDictionary(dir: string, signal?: AbortSignal): Promi
     response = await fetch(DICTIONARY_URL, { signal });
   } catch (err) {
     if (signal?.aborted) throw err;
-    throw new Error(`Český slovník se nepodařilo stáhnout: ${(err as Error).message}`);
+    throw new Error(t('spell.downloadFailed', { error: (err as Error).message }));
   }
-  if (!response.ok) throw new Error(`Český slovník se nepodařilo stáhnout (HTTP ${response.status}).`);
+  if (!response.ok) throw new Error(t('spell.downloadHttp', { status: response.status }));
   const tgz = Buffer.from(await response.arrayBuffer());
   if (createHash('sha512').update(tgz).digest('base64') !== DICTIONARY_SHA512) {
-    throw new Error('Stažený český slovník neodpovídá očekávanému kontrolnímu součtu, nebyl uložen.');
+    throw new Error(t('spell.checksum'));
   }
 
   const files = unpackTgz(tgz);
   const aff = files.get('package/index.aff');
   const dic = files.get('package/index.dic');
-  if (!aff || !dic) throw new Error('V archivu českého slovníku chybí soubory index.aff a index.dic.');
+  if (!aff || !dic) throw new Error(t('spell.missingFiles'));
   await mkdir(target, { recursive: true });
   // .dic až nakonec: bez něj se při dalším spuštění stahuje znovu.
   await writeAtomic(affPath, aff);

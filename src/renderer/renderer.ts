@@ -1,8 +1,10 @@
-import { LANGUAGES } from '../shared/languages';
+import { getLang, resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
+import { languageName, LANGUAGES } from '../shared/languages';
 import { isValidPageRange } from '../shared/pages';
 import type { Api, Job, Mode, Models, Settings } from '../shared/types';
 import { closeDetail, detailJobId, openDetail, setupDetail, updateDetail } from './detail';
 import {
+  applyI18n,
   date,
   duration,
   h,
@@ -28,7 +30,7 @@ declare global {
 type View = 'home' | 'history' | 'detail' | 'glossary' | 'settings';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const ROLE_NAMES: Record<keyof Models, string> = { ocr: 'OCR', translate: 'Překlad', polish: 'Opravy' };
+const ROLE_NAMES: Record<keyof Models, MessageKey> = { ocr: 'role.ocr', translate: 'role.translate', polish: 'role.polish' };
 // Průměrná stránka článku má kolem 3000 znaků a 8 odstavců; opravu potřebuje zhruba 15 % z nich.
 const CHARS_PER_PAGE = 3000;
 const FIXES_PER_PAGE = 8 * 0.15;
@@ -66,10 +68,10 @@ async function refreshStatus() {
   const dot = $('status-dot');
   dot.className = `status-dot ${lm.online ? 'online' : 'offline'}`;
   $('lm-state').textContent = lm.online
-    ? 'Server běží'
+    ? t('lm.running')
     : lm.cli
-      ? 'Server neběží – spustí se sám při překladu'
-      : 'LM Studio nenalezeno';
+      ? t('lm.stopped')
+      : t('lm.notFound');
   $('lm-models').replaceChildren(
     ...(Object.keys(ROLE_NAMES) as (keyof Models)[]).map((role) => {
       const missing = lm.missing.includes(role);
@@ -77,8 +79,8 @@ async function refreshStatus() {
       return h(
         'li',
         {},
-        h('span', { class: 'role' }, ROLE_NAMES[role]),
-        h('span', { class: missing ? 'model missing' : 'model', title: name }, missing ? `chybí: ${name}` : name),
+        h('span', { class: 'role' }, t(ROLE_NAMES[role])),
+        h('span', { class: missing ? 'model missing' : 'model', title: name }, missing ? t('lm.missing', { name }) : name),
       );
     }),
   );
@@ -93,7 +95,7 @@ function modeTime(mode: Mode) {
     k * r.translatePerKChar +
     (mode === 'fast' ? 0 : r.ocrPerPage + FIXES_PER_PAGE * r.fixPerSegment) +
     (mode === 'quality' ? CONTEXT_SECONDS : 0);
-  return `≈ ${duration(seconds)} na stránku`;
+  return t('home.timePerPage', { time: duration(seconds) });
 }
 
 function renderModes() {
@@ -111,8 +113,8 @@ function renderModes() {
             await window.api.saveSettings(settings);
           },
         },
-        h('span', { class: 'mode-title' }, icon(ICONS[mode]), MODES[mode].title),
-        h('span', { class: 'mode-desc' }, MODES[mode].desc),
+        h('span', { class: 'mode-title' }, icon(ICONS[mode]), t(MODES[mode].title)),
+        h('span', { class: 'mode-desc' }, t(MODES[mode].desc)),
         h('span', { class: 'mode-time' }, modeTime(mode)),
       ),
     ),
@@ -122,10 +124,10 @@ function renderModes() {
 function fillLanguages() {
   const source = $<HTMLSelectElement>('source-lang');
   const target = $<HTMLSelectElement>('target-lang');
-  source.replaceChildren(h('option', { value: 'auto' }, 'Rozpoznat automaticky'));
+  source.replaceChildren(h('option', { value: 'auto' }, t('lang.auto')));
   for (const l of LANGUAGES) {
-    source.append(h('option', { value: l.code }, l.name));
-    target.append(h('option', { value: l.code }, l.name));
+    source.append(h('option', { value: l.code }, languageName(l.code)));
+    target.append(h('option', { value: l.code }, languageName(l.code)));
   }
   source.value = settings.sourceLang;
   target.value = settings.targetLang;
@@ -142,7 +144,7 @@ async function addFiles(paths: string[]) {
   if (!paths.length) return;
   const pageRange = $<HTMLInputElement>('page-range').value;
   if (!isValidPageRange(pageRange)) {
-    toast('Neplatný rozsah stránek. Použij např. 1-8 nebo 1-3, 5.', true);
+    toast(t('home.badRange'), true);
     return;
   }
   try {
@@ -152,7 +154,7 @@ async function addFiles(paths: string[]) {
       targetLang: settings.targetLang,
       pageRange,
     });
-    toast(paths.length === 1 ? 'Přidáno do fronty' : `Přidáno do fronty: ${paths.length} souborů`);
+    toast(paths.length === 1 ? t('home.queued') : t('home.queuedMany', { count: paths.length }));
   } catch (e) {
     toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true);
   }
@@ -190,20 +192,20 @@ function jobCard(job: Job) {
       'div',
       {},
       h('div', { class: 'job-card-name' }, `${job.name}${job.ext}`),
-      h('div', { class: 'job-card-stage' }, [info.label, info.eta, MODES[job.mode].title].filter(Boolean).join(' · ')),
+      h('div', { class: 'job-card-stage' }, [info.label, info.eta, t(MODES[job.mode].title)].filter(Boolean).join(' · ')),
     ),
     h(
       'div',
       { class: 'row gap' },
-      h('button', { class: 'btn', onclick: () => openJob(job.id) }, 'Detail'),
-      h('button', { class: 'btn danger', onclick: () => window.api.cancelJob(job.id) }, icon(ICONS.stop), 'Zrušit'),
+      h('button', { class: 'btn', onclick: () => openJob(job.id) }, t('job.open')),
+      h('button', { class: 'btn danger', onclick: () => window.api.cancelJob(job.id) }, icon(ICONS.stop), t('job.cancel')),
     ),
     progressBar(info.fraction),
   );
 }
 
 function jobRow(job: Job) {
-  const parts = [STATUS_TEXT[job.status], date(job.createdAt), MODES[job.mode].title, langPair(job), jobDuration(job)];
+  const parts = [t(STATUS_TEXT[job.status]), date(job.createdAt), t(MODES[job.mode].title), langPair(job), jobDuration(job)];
   if (job.status === 'running' || job.status === 'queued') {
     const info = progressInfo(job);
     parts.splice(1, 0, info.label);
@@ -218,7 +220,7 @@ function jobRow(job: Job) {
       h('div', { class: 'job-row-name' }, `${job.name}${job.ext}`),
       h('div', { class: 'job-row-meta' }, parts.filter(Boolean).join(' · ')),
     ),
-    job.warnings ? h('span', { class: 'chip warn' }, `${job.warnings}× upozornění`) : job.status === 'error' ? h('span', { class: 'chip err' }, 'Chyba') : '',
+    job.warnings ? h('span', { class: 'chip warn' }, t('job.warnings', { count: job.warnings })) : job.status === 'error' ? h('span', { class: 'chip err' }, t('status.error')) : '',
   );
 }
 
@@ -262,6 +264,9 @@ function onSettingsSaved(next: Settings) {
 async function init() {
   document.body.classList.add(`platform-${window.api.platform}`);
   settings = await window.api.getSettings();
+  setLang(resolveLang(settings.uiLang, navigator.language));
+  document.documentElement.lang = getLang();
+  applyI18n();
   applyTheme();
   jobs = new Map((await window.api.listJobs()).map((j) => [j.id, j]));
 

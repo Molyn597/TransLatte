@@ -22,31 +22,31 @@
         <nav class="panel nav-panel">
           <button class="nav-item active" data-nav="home">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h9M8.5 3v2M6 5c1 4 3.5 6.5 7 8M11 5c-1 4-3.5 7-7 9" /><path d="M13 21l4-9 4 9M14.5 18h5" /></svg>
-            <span>Přeložit</span>
+            <span data-i18n="nav.translate">Přeložit</span>
           </button>
           <button class="nav-item" data-nav="history">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 3" /></svg>
-            <span>Historie</span>
+            <span data-i18n="nav.history">Historie</span>
             <span class="nav-badge" id="active-badge" hidden></span>
           </button>
           <button class="nav-item" data-nav="glossary">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z" /><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5M8 7h8M8 11h5" /></svg>
-            <span>Glosář</span>
+            <span data-i18n="nav.glossary">Glosář</span>
           </button>
           <button class="nav-item" data-nav="settings">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></svg>
-            <span>Nastavení</span>
+            <span data-i18n="nav.settings">Nastavení</span>
           </button>
         </nav>
 
         <section class="panel lm-card">
           <div class="lm-head">
             <span>LM Studio</span>
-            <button class="circle-btn small" id="lm-refresh" title="Zkontrolovat znovu">
+            <button class="circle-btn small" id="lm-refresh" title="Zkontrolovat znovu" data-i18n-title="lm.recheck">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></svg>
             </button>
           </div>
-          <div class="lm-state" id="lm-state">Zjišťuji…</div>
+          <div class="lm-state" id="lm-state" data-i18n="lm.checking">Zjišťuji…</div>
           <ul class="lm-models" id="lm-models"></ul>
         </section>
       </aside>
@@ -54,56 +54,56 @@
       <main class="panel main">
         <section class="view" data-view="home">
           <header class="view-head">
-            <h1>Přeložit dokument</h1>
-            <p class="muted">PDF (i skeny), Word, TXT nebo Markdown. Vše se zpracuje lokálně ve tvém LM Studiu.</p>
+            <h1 data-i18n="home.title">Přeložit dokument</h1>
+            <p class="muted" data-i18n="home.subtitle">PDF (i skeny), Word, TXT nebo Markdown. Vše se zpracuje lokálně ve tvém LM Studiu.</p>
           </header>
 
           <button class="dropzone" id="dropzone">
             <span class="drop-icon">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5" /><path d="M20 15v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4" /></svg>
             </span>
-            <span class="drop-title">Přetáhni sem soubory</span>
-            <span class="drop-sub">nebo klikni a vyber je · PDF, DOCX, TXT, MD</span>
+            <span class="drop-title" data-i18n="home.dropTitle">Přetáhni sem soubory</span>
+            <span class="drop-sub" data-i18n="home.dropSub">nebo klikni a vyber je · PDF, DOCX, TXT, MD</span>
           </button>
 
           <div class="options">
-            <div class="modes" id="modes" role="radiogroup" aria-label="Režim"></div>
+            <div class="modes" id="modes" role="radiogroup" aria-label="Režim" data-i18n-aria-label="home.mode"></div>
             <div class="langs">
               <label class="field">
-                <span>Z jazyka</span>
+                <span data-i18n="home.from">Z jazyka</span>
                 <select id="source-lang"></select>
               </label>
               <svg class="lang-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
               <label class="field">
-                <span>Do jazyka</span>
+                <span data-i18n="home.to">Do jazyka</span>
                 <select id="target-lang"></select>
               </label>
               <label class="field pages-field">
-                <span>Stránky PDF</span>
-                <input id="page-range" type="text" placeholder="všechny" title="Např. 1-8 nebo 1-3, 5. Prázdné = celý dokument." />
+                <span data-i18n="home.pages">Stránky PDF</span>
+                <input id="page-range" type="text" placeholder="všechny" title="Např. 1-8 nebo 1-3, 5. Prázdné = celý dokument." data-i18n-placeholder="home.pagesAll" data-i18n-title="home.pagesHint" />
               </label>
             </div>
           </div>
 
-          <div class="section-title" id="active-title" hidden>Probíhá</div>
+          <div class="section-title" id="active-title" data-i18n="home.active" hidden>Probíhá</div>
           <div class="job-cards" id="active-jobs"></div>
 
-          <div class="section-title" id="recent-title" hidden>Naposledy přeloženo</div>
+          <div class="section-title" id="recent-title" data-i18n="home.recent" hidden>Naposledy přeloženo</div>
           <div class="job-list" id="recent-jobs"></div>
         </section>
 
         <section class="view" data-view="history" hidden>
           <header class="view-head row">
-            <h1>Historie</h1>
-            <input class="search" id="history-search" type="search" placeholder="Hledat podle názvu…" />
+            <h1 data-i18n="nav.history">Historie</h1>
+            <input class="search" id="history-search" type="search" placeholder="Hledat podle názvu…" data-i18n-placeholder="history.search" />
           </header>
           <div class="job-list" id="history-list"></div>
-          <p class="empty" id="history-empty" hidden>Zatím tu nic není. Přelož první dokument.</p>
+          <p class="empty" id="history-empty" data-i18n="history.empty" hidden>Zatím tu nic není. Přelož první dokument.</p>
         </section>
 
         <section class="view detail" data-view="detail" hidden>
           <header class="detail-head">
-            <button class="circle-btn" id="detail-back" title="Zpět">
+            <button class="circle-btn" id="detail-back" title="Zpět" data-i18n-title="detail.back">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
             </button>
             <div class="detail-title">
@@ -114,34 +114,34 @@
           </header>
           <div class="detail-progress" id="detail-progress" hidden></div>
           <div class="tabs" role="tablist" id="detail-tabs">
-            <button class="tab active" data-tab="compare">Srovnání</button>
-            <button class="tab" data-tab="translated-pdf" data-pdf hidden>Překlad PDF</button>
-            <button class="tab" data-tab="side-by-side" data-pdf hidden>PDF vedle sebe</button>
-            <button class="tab" data-tab="translation">Překlad</button>
-            <button class="tab" data-tab="original">Originál</button>
-            <button class="tab" data-tab="info">Informace</button>
+            <button class="tab active" data-tab="compare" data-i18n="detail.tab.compare">Srovnání</button>
+            <button class="tab" data-tab="translated-pdf" data-pdf hidden data-i18n="detail.tab.translatedPdf">Překlad PDF</button>
+            <button class="tab" data-tab="side-by-side" data-pdf hidden data-i18n="detail.tab.sideBySide">PDF vedle sebe</button>
+            <button class="tab" data-tab="translation" data-i18n="detail.tab.translation">Překlad</button>
+            <button class="tab" data-tab="original" data-i18n="detail.tab.original">Originál</button>
+            <button class="tab" data-tab="info" data-i18n="detail.tab.info">Informace</button>
           </div>
           <div class="tab-body" id="detail-body"></div>
         </section>
 
         <section class="view" data-view="glossary" hidden>
           <header class="view-head">
-            <h1>Glosář</h1>
-            <p class="muted">
+            <h1 data-i18n="nav.glossary">Glosář</h1>
+            <p class="muted" data-i18n="glossary.intro">
               Závazné překlady odborných termínů. Kvalitní režim je předá redaktorovi; v ostatních režimech se opraví odstavce,
               kde termín v překladu chybí.
             </p>
           </header>
           <div class="glossary" id="glossary"></div>
           <div class="row gap">
-            <button class="btn" id="glossary-add">Přidat termín</button>
+            <button class="btn" id="glossary-add" data-i18n="glossary.add">Přidat termín</button>
             <span class="muted small" id="glossary-saved"></span>
           </div>
         </section>
 
         <section class="view" data-view="settings" hidden>
           <header class="view-head">
-            <h1>Nastavení</h1>
+            <h1 data-i18n="nav.settings">Nastavení</h1>
           </header>
           <div class="settings" id="settings"></div>
         </section>

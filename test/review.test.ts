@@ -63,7 +63,7 @@ describe('findIssues', () => {
   it('pravopis jen pro češtinu', () => {
     const issues = findIssues(para('About promotions.'), 'Rozhodli jsme o povýšeních.', ['povýšeních'], options());
     expect(issues).toEqual([
-      { kind: 'spelling', text: 'Pravděpodobné překlepy: povýšeních.', en: 'Probable typos: povýšeních.', count: 1 },
+      { kind: 'spelling', text: 'Pravděpodobné překlepy: povýšeních.', cs: 'Pravděpodobné překlepy: povýšeních.', en: 'Probable typos: povýšeních.', count: 1 },
     ]);
     expect(findIssues(para('About promotions.'), 'Wir haben entschieden.', ['x'], options({ targetLang: 'de' }))).toEqual([]);
   });
@@ -100,6 +100,7 @@ describe('findIssues', () => {
       {
         kind: 'gender',
         text: 'Autor je žena, ale překlad používá mužský rod: „jsem uvedl“, „uvědomil jsem“.',
+        cs: 'Autor je žena, ale překlad používá mužský rod: „jsem uvedl“, „uvědomil jsem“.',
         en: '',
         count: 2,
       },
@@ -131,7 +132,7 @@ describe('changedWords', () => {
 describe('acceptFix', () => {
   const source = 'We decided about promotions and shared our experience with the employees.';
   const before = 'Rozhodli jsme o povýbeních a sdíleli jsme svou zkušenost se zaměstnanci firmy.';
-  const spelling = (n: number): Issue[] => (n ? [{ kind: 'spelling', text: '', en: '', count: n }] : []);
+  const spelling = (n: number): Issue[] => (n ? [{ kind: 'spelling', text: '', cs: '', en: '', count: n }] : []);
 
   it('přijme cílenou opravu, která problémy ubrala', () => {
     const after = 'Rozhodli jsme o povýšeních a sdíleli jsme svou zkušenost se zaměstnanci firmy.';
@@ -141,7 +142,7 @@ describe('acceptFix', () => {
   it('pár slov změněných kvůli rodu projde i v dlouhém odstavci', () => {
     const long = 'Když jsem uvedl tento příklad na poradě vedení, uvědomil jsem si, že většina manažerů o systému Check-in nikdy neslyšela a že je potřeba vysvětlit, jak funguje.';
     const fixed = 'Když jsem uvedla tento příklad na poradě vedení, uvědomila jsem si, že většina manažerů o systému Check-in nikdy neslyšela a že je potřeba vysvětlit, jak funguje.';
-    const gender: Issue[] = [{ kind: 'gender', text: '', en: '', count: 2 }];
+    const gender: Issue[] = [{ kind: 'gender', text: '', cs: '', en: '', count: 2 }];
     expect(acceptFix(source, long, fixed, gender, [])).toBe(true);
   });
 
@@ -155,18 +156,18 @@ describe('acceptFix', () => {
   it('odmítne vysvětlivky v závorkách přidané k několika výskytům termínu', () => {
     const text = 'Systém Check-in nahradil hodnocení. Každý Check-in trvá hodinu a po Check-in následuje plán.';
     const glossed = text.replace(/Check-in/g, 'Check-in (běžné zpětné vazby)');
-    const glossary: Issue[] = [{ kind: 'glossary', text: '', en: '', count: 1 }];
+    const glossary: Issue[] = [{ kind: 'glossary', text: '', cs: '', en: '', count: 1 }];
     expect(acceptFix(source, text, glossed, glossary, [])).toBe(false);
   });
 
   it('odmítne opravu, po které je problémů víc', () => {
     const after = 'Rozhodli jsme o povýšeních a sdílili jsme svou zkušenost se zaměstnanci frmy.';
     expect(acceptFix(source, before, after, spelling(1), spelling(2))).toBe(false);
-    expect(issueCount([...spelling(2), { kind: 'glossary', text: '', en: '', count: 1 }])).toBe(3);
+    expect(issueCount([...spelling(2), { kind: 'glossary', text: '', cs: '', en: '', count: 1 }])).toBe(3);
   });
 
   it('u podezřelé délky stačí poměr vůči originálu 0,6–1,8', () => {
-    const suspicious: Issue[] = [{ kind: 'suspicious', text: '', en: '', count: 1 }];
+    const suspicious: Issue[] = [{ kind: 'suspicious', text: '', cs: '', en: '', count: 1 }];
     const full = 'Rozhodli jsme se o povýšeních a podělili se o své zkušenosti se zaměstnanci.';
     expect(acceptFix(source, 'Rozhodli jsme.', full, suspicious, [])).toBe(true);
     expect(acceptFix(source, 'Rozhodli jsme.', 'Rozhodli jsme se.', suspicious, [])).toBe(false);

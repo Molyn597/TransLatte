@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { t } from '../shared/i18n';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import type { SpellItem } from './spell';
@@ -25,7 +26,7 @@ export class SpellWorker {
       else p?.resolve(result!);
     });
     this.worker.on('error', (err) => this.fail(err as Error));
-    this.worker.on('exit', (code) => this.fail(new Error(`Kontrola pravopisu skončila (kód ${code}).`)));
+    this.worker.on('exit', (code) => this.fail(new Error(t('spell.exited', { code: code ?? '?' }))));
   }
 
   private fail(err: Error) {

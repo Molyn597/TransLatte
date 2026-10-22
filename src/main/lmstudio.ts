@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { t } from '../shared/i18n';
 import type { LmStatus, Models } from '../shared/types';
 
 const exec = promisify(execFile);
@@ -73,10 +74,10 @@ export async function status(apiUrl: string, models: Models): Promise<LmStatus> 
 export async function ensureServer(apiUrl: string) {
   if (await serverUp(apiUrl)) return;
   if (!existsSync(lmsPath())) {
-    throw new Error('LM Studio není spuštěné a jeho příkaz „lms“ se nenašel. Spusť LM Studio a zapni v něm server.');
+    throw new Error(t('lmstudio.notInstalled'));
   }
   await lms(['server', 'start']);
-  if (!(await serverUp(apiUrl))) throw new Error(`Server LM Studia neodpovídá na ${apiUrl}.`);
+  if (!(await serverUp(apiUrl))) throw new Error(t('lmstudio.noResponse', { url: apiUrl }));
 }
 
 /** V paměti je vždy jen jeden model (12B modely se do 16 GB vejdou jen po jednom). */
@@ -88,7 +89,7 @@ export async function ensureModel(modelKey: string, identifier: string) {
     // 16k kontextu: LM Studio ho dělí mezi souběžné požadavky (pipeline jich posílá až 4).
     await lms(['load', modelKey, '-y', '-c', '16384', '--identifier', identifier]);
   } catch (e) {
-    throw new Error(`Model „${modelKey}“ se nepodařilo načíst. Je stažený v LM Studiu? (${(e as Error).message})`);
+    throw new Error(t('lmstudio.loadFailed', { model: modelKey, error: (e as Error).message }));
   }
 }
 
@@ -103,7 +104,7 @@ async function post<T>(url: string, body: unknown, signal?: AbortSignal): Promis
     body: JSON.stringify(body),
     signal,
   });
-  if (!res.ok) throw new Error(`LM Studio vrátilo chybu ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) throw new Error(t('lmstudio.httpError', { status: res.status, body: (await res.text()).slice(0, 300) }));
   return (await res.json()) as T;
 }
 

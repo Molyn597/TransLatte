@@ -3,6 +3,7 @@ import path from 'node:path';
 import { nativeImage } from 'electron';
 import mammoth from 'mammoth';
 import { detect } from 'tinyld';
+import { t } from '../shared/i18n';
 import { isSupported } from '../shared/languages';
 import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, Segment, Settings, Stage } from '../shared/types';
 import { selectPages } from '../shared/pages';
@@ -202,7 +203,6 @@ async function ocrPage(ctx: JobContext, docId: string, page: number, scale: numb
 
 const blocksText = (blocks: Block[]) => blocks.map((b) => b.text).join('\n');
 
-const TABLE_FALLBACK = 'Tabulku se nepodařilo přečíst po buňkách, je převedená na text. Zkontroluj ji proti originálu.';
 
 /** Tabulky bez buněk přečte znovu vision model pro opravy z výřezu stránky. */
 async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
@@ -229,7 +229,7 @@ async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
     if (table) block.text = table;
     else {
       block.kind = 'paragraph';
-      block.warning = TABLE_FALLBACK;
+      block.warning = t('pipeline.tableFallback');
     }
     block.needsRepair = false;
   }
@@ -284,12 +284,12 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       };
       if (bad(result)) result = parseOcr(await ocrPage(ctx, docId, p, 3), p, size); // druhý pokus ve vyšším rozlišení
       if (bad(result)) {
-        if (layout.scanned) warnings.set(p, 'OCR této stránky může obsahovat chyby. Zkontroluj ji proti originálu.');
+        if (layout.scanned) warnings.set(p, t('pipeline.ocrErrors'));
         else {
           result = layout.blocks;
           // U krátké stránky (zápatí webu, titulní list) na pořadí odstavců nezáleží.
           if (reference.length > 400) {
-            warnings.set(p, 'OCR se neshodovalo s textem v PDF, proto je použit text přímo z PDF (může mít horší pořadí odstavců).');
+            warnings.set(p, t('pipeline.ocrMismatch'));
           }
         }
       } else if (!layout.scanned) {
@@ -453,7 +453,7 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
         if (parts && !looksWrong(u.prepared, parts[i])) u.translation = parts[i];
         else {
           u.translation = await translateText(ctx, u.prepared);
-          if (looksWrong(u.prepared, u.translation)) addNotes(u.seg, ['Překlad tohoto odstavce může být neúplný.']);
+          if (looksWrong(u.prepared, u.translation)) addNotes(u.seg, [t('pipeline.mayBeIncomplete')]);
         }
       }
       report(items.reduce((n, u) => n + u.source.length, 0));
@@ -489,7 +489,7 @@ async function readContext(ctx: JobContext, segments: Segment[], eta: Eta): Prom
   } catch (err) {
     if (ctx.signal.aborted) throw err;
   }
-  if (!context) addJobNote(job, 'Kontext dokumentu se nepodařilo zjistit, opravy proběhly bez něj.');
+  if (!context) addJobNote(job, t('pipeline.noContext'));
   return context;
 }
 
@@ -501,7 +501,7 @@ async function startSpeller(ctx: JobContext): Promise<SpellWorker | undefined> {
     return new SpellWorker(spellWorkerPath(__dirname), dictionary);
   } catch (err) {
     if (ctx.signal.aborted) throw err;
-    addJobNote(ctx.job, `Kontrola pravopisu se přeskočila: ${(err as Error).message}`);
+    addJobNote(ctx.job, t('pipeline.spellSkipped', { error: (err as Error).message }));
     return undefined;
   }
 }
@@ -524,7 +524,7 @@ function reviewer(ctx: JobContext, speller: SpellWorker | undefined): Reviewer {
         if (ctx.signal.aborted) throw err;
         // Spadlý worker (např. nedostatek paměti) úlohu nezastaví, jen se dál nekontroluje pravopis.
         working = undefined;
-        addJobNote(job, `Kontrola pravopisu se přerušila: ${(err as Error).message}`);
+        addJobNote(job, t('pipeline.spellInterrupted', { error: (err as Error).message }));
         return items.map(() => []);
       }
     },
@@ -559,7 +559,7 @@ async function fixSegment(ctx: JobContext, seg: Segment, issues: Issue[], r: Rev
     ID.polish,
     [
       { role: 'system', content: fixSystem(job.targetLang, relevantGlossary(seg.source, reviewGlossary(r.options)), job.context) },
-      { role: 'user', content: fixUser(seg.source, before, issues.map((i) => (cs ? i.text : i.en)), job.targetLang) },
+      { role: 'user', content: fixUser(seg.source, before, issues.map((i) => (cs ? i.cs : i.en)), job.targetLang) },
     ],
     { maxTokens: Math.min(4000, Math.ceil(before.length / 1.5) + 200), signal: ctx.signal },
   );
@@ -610,10 +610,10 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   await ensureServer(settings.apiUrl);
 
   ctx.progress({ stage: 'extract', done: 0, total: 0 });
-  let t = Date.now();
+  let tick = Date.now();
   const segments = await extract(ctx, store.inputPath(job), eta);
-  if (!segments.length) throw new Error('V dokumentu se nenašel žádný text.');
-  if (ctx.ocrCount) measured.ocrPerPage = (Date.now() - t) / 1000 / ctx.ocrCount;
+  if (!segments.length) throw new Error(t('pipeline.noText'));
+  if (ctx.ocrCount) measured.ocrPerPage = (Date.now() - tick) / 1000 / ctx.ocrCount;
   job.chars = segments.reduce((n, s) => n + s.source.length, 0);
   const reviewable = segments.filter((s) => s.kind !== 'table' && !s.layoutOnly).length;
   eta.setPlan({ chars: job.chars, fixes: job.mode === 'fast' ? 0 : Math.round(reviewable * FIX_SHARE) });
@@ -624,9 +624,9 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   } else {
     // Kvalitní: Gemma (kontext) → TranslateGemma (překlad) → kontrola bez modelu → Gemma (opravy).
     if (job.mode === 'quality') job.context = await readContext(ctx, segments, eta);
-    t = Date.now();
+    tick = Date.now();
     await translateAll(ctx, segments, eta);
-    measured.translatePerKChar = (Date.now() - t) / job.chars;
+    measured.translatePerKChar = (Date.now() - tick) / job.chars;
   }
   applyDeterministic(segments, job.targetLang);
 
@@ -637,9 +637,9 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
       const found = await checkAll(ctx, segments, r, eta);
       if (job.mode !== 'fast' && found.size) {
         eta.setPlan({ fixes: found.size });
-        t = Date.now();
+        tick = Date.now();
         await fixAll(ctx, found, r, eta);
-        measured.fixPerSegment = (Date.now() - t) / 1000 / found.size;
+        measured.fixPerSegment = (Date.now() - tick) / 1000 / found.size;
       }
       for (const [seg, issues] of found) addNotes(seg, issues.map((i) => i.text));
     } finally {
@@ -651,7 +651,7 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   for (const seg of segments) {
     if (!seg.links) continue;
     const found = findAnchors(finalText(seg), seg.links, seg.source);
-    addNotes(seg, seg.links.filter((_, i) => !found[i]).map((l) => `Odkaz „${l.source}“ se v překladu nenašel, v přeloženém PDF ani ve Wordu nebude klikací.`));
+    addNotes(seg, seg.links.filter((_, i) => !found[i]).map((l) => t('pipeline.linkNotFound', { link: l.source })));
   }
 
   ctx.progress({ stage: 'write', done: 0, total: 0 });
@@ -689,17 +689,17 @@ async function writeLayoutPdf(ctx: JobContext, segments: Segment[], pages: Map<n
       text: finalText,
     });
     for (const [seg, numbers] of result.overflow) {
-      addNotes(seg, numbers.map((n) => `Překlad se na stránce ${n} nevešel do původního místa.`));
+      addNotes(seg, numbers.map((n) => t('pipeline.noFit', { page: n })));
     }
     if (result.rotated.length) {
-      addJobNote(job, `Otočené stránky (${result.rotated.join(', ')}) zůstaly v přeloženém PDF beze změny.`);
+      addJobNote(job, t('pipeline.rotated', { count: result.rotated.length, pages: result.rotated.join(', ') }));
     }
     const name = outputPdfName(job);
     await writeFile(path.join(store.jobDir(job.id), name), result.pdf);
     job.outputPdf = name;
   } catch (err) {
     if (ctx.signal.aborted) throw err;
-    addJobNote(job, `PDF se zachovaným vzhledem se nepodařilo vytvořit: ${(err as Error).message}`);
+    addJobNote(job, t('pipeline.layoutFailed', { error: (err as Error).message }));
   } finally {
     await closePdf(docId);
   }

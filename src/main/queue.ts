@@ -1,6 +1,7 @@
 import { copyFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { t } from '../shared/i18n';
 import type { Job, JobOptions, Mode, Rates } from '../shared/types';
 import { unloadAll } from './lmstudio';
 import { runJob, type Measured } from './pipeline';
@@ -43,7 +44,7 @@ export class Queue {
     for (const job of await this.store.jobs()) {
       if (job.status === 'running' || job.status === 'queued') {
         job.status = 'cancelled';
-        job.error = 'Aplikace byla během překladu ukončena.';
+        job.error = t('queue.interrupted');
         job.progress = undefined;
         await this.store.saveJob(job);
       }
@@ -52,7 +53,7 @@ export class Queue {
 
   async add(file: string, options: JobOptions) {
     const ext = path.extname(file).toLowerCase();
-    if (!SUPPORTED.includes(ext)) throw new Error(`Formát ${ext || 'bez přípony'} není podporovaný.`);
+    if (!SUPPORTED.includes(ext)) throw new Error(t('queue.unsupported', { ext: ext || t('queue.noExtension') }));
     const job: Job = {
       id: randomUUID(),
       name: path.basename(file, path.extname(file)),

@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { GlossaryEntry, Job, Segment, Settings } from '../shared/types';
 
 export const DEFAULT_SETTINGS: Settings = {
+  uiLang: 'system',
   apiUrl: 'http://localhost:1234',
   models: { ocr: 'unlimited-ocr', translate: 'translategemma-12b-it', polish: 'google/gemma-4-12b-qat' },
   mode: 'fast',

@@ -22,7 +22,7 @@ The models run on the GPU. Only one model is in memory at a time; the app swaps 
 
 - **Mac:** the GPU shares memory with the system and macOS gives it roughly two thirds to three quarters of it, so 16 GB is the minimum. Intel Macs with AMD graphics have not been tested.
 - **Windows:** LM Studio splits the model between GPU and RAM on its own. If a model fails to load or the system becomes unusable, open the model settings in LM Studio (**My Models** → gear icon next to the model) and lower **GPU Offload**. Fewer layers on the GPU means less VRAM but slower translation.
-- **Weaker and stronger machines:** TranslateGemma also comes in 4B (for 6–8 GB VRAM, lower quality) and 27B (for 24 GB VRAM, better quality). After downloading, select it in **Nastavení → Překlad** (Settings → Translation). These sizes have not been tested with TransLatte yet.
+- **Weaker and stronger machines:** TranslateGemma also comes in 4B (for 6–8 GB VRAM, lower quality) and 27B (for 24 GB VRAM, better quality). After downloading, select it in **Settings → Translation**. These sizes have not been tested with TransLatte yet.
 
 These requirements are estimates. They have been verified on a 16 GB Apple Silicon MacBook Air.
 
@@ -51,27 +51,27 @@ Download the installer from [Releases](https://github.com/Molyn597/TransLatte/re
 
 ### 3. First run
 
-The connection status to LM Studio is shown in the left sidebar (the **LM Studio** item). In **Nastavení** (Settings) each role (OCR, translation, fixes) has a model selected. If you downloaded the models from the table, everything is set. Change the server address (`http://localhost:1234`) only if LM Studio runs on another port or machine.
+The connection status to LM Studio is shown in the left sidebar (the **LM Studio** item). In **Settings** each role (OCR, translation, fixes) has a model selected. If you downloaded the models from the table, everything is set. Change the server address (`http://localhost:1234`) only if LM Studio runs on another port or machine. The app language (Czech or English, by default following the system) can be changed in **Settings → App**.
 
 ## How to translate
 
-1. On the **Přeložit** (Translate) tab, drop files (PDF, DOCX, TXT, MD), pick the languages and a mode. For PDFs you can limit **Stránky PDF** (PDF pages), e.g. `1-5, 8`.
-2. The job is queued; progress and the time estimate appear under **Probíhá** (In progress).
-3. Finished translations are in **Historie** (History). The job detail has tabs:
-   - **Srovnání** (Comparison): original and translation paragraph by paragraph, with warnings about possible errors.
-   - **Překlad** (Translation): the translated text only.
-   - **Překlad PDF** and **PDF vedle sebe** (Translated PDF, side by side): the translated PDF with the original layout, on its own or next to the original.
-   - **Originál** and **Informace** (Original, Info).
+1. On the **Translate** tab, drop files (PDF, DOCX, TXT, MD), pick the languages and a mode. For PDFs you can limit **PDF pages**, e.g. `1-5, 8`.
+2. The job is queued; progress and the time estimate appear under **In progress**.
+3. Finished translations are in **History**. The job detail has tabs:
+   - **Comparison**: original and translation paragraph by paragraph, with warnings about possible errors.
+   - **Translation**: the translated text only.
+   - **Translated PDF** and **PDFs side by side**: the translated PDF with the original layout, on its own or next to the original.
+   - **Original** and **Information**.
 
-   The **Otevřít Word** and **Otevřít PDF** buttons open the output files.
+   The **Open Word** and **Open PDF** buttons open the output files.
 
 ### Modes
 
 | Mode | What it does | When to use |
 | --- | --- | --- |
-| **Rychlý** (Fast) | Takes text straight from the PDF, OCR only for scanned pages. Only flags errors. | Ordinary digital PDFs; the default. |
-| **Vyvážený** (Balanced) | OCR of all pages (better paragraph order and tables), checks and fixes errors. | Complex layouts, tables. |
-| **Kvalitní** (Quality) | Also reads the document context (topic, author and their grammatical gender) for more accurate fixes. | Texts that matter. |
+| **Fast** | Takes text straight from the PDF, OCR only for scanned pages. Only flags errors. | Ordinary digital PDFs; the default. |
+| **Balanced** | OCR of all pages (better paragraph order and tables), checks and fixes errors. | Complex layouts, tables. |
+| **Quality** | Also reads the document context (topic, author and their grammatical gender) for more accurate fixes. | Texts that matter. |
 
 ## How it works
 
@@ -88,14 +88,14 @@ Jobs and outputs are stored in the app folder:
 
 ## Glossary
 
-On the **Glosář** (Glossary) tab you set binding translations of technical terms (e.g. *performance review → hodnocení výkonu*). After translation the check warns when a term is missing and the fix step adds it.
+On the **Glossary** tab you set binding translations of technical terms (e.g. *performance review → hodnocení výkonu*). After translation the check warns when a term is missing and the fix step adds it.
 
 ## Troubleshooting
 
-- **"LM Studio není spuštěné a jeho příkaz „lms“ se nenašel"** (LM Studio is not running and its `lms` command was not found): LM Studio is not installed or has never been started. Start it and try again.
-- **"Model … se nepodařilo načíst"** (Model … could not be loaded): the model is not downloaded or doesn't fit in memory. Check in LM Studio that it is downloaded, close heavy apps, or lower GPU Offload (see [Hardware requirements](#hardware-requirements)).
+- **“LM Studio is not running and its ‘lms’ command was not found”**: LM Studio is not installed or has never been started. Start it and try again.
+- **“Could not load the model …”**: the model is not downloaded or doesn't fit in memory. Check in LM Studio that it is downloaded, close heavy apps, or lower GPU Offload (see [Hardware requirements](#hardware-requirements)).
 - **Translation is slow or slows down over time:** laptops without active cooling throttle under long load. Plug in the charger and translate in smaller parts.
-- **"Překlad se na stránce N nevešel do původního místa"** (The translation did not fit on page N): Czech text tends to be longer. The translated PDF uses a smaller font there or the text overflows; the full text is in the Word file.
+- **“The translation did not fit into the original space on page N”**: Czech text tends to be longer. The translated PDF uses a smaller font there or the text overflows; the full text is in the Word file.
 - **Bullet points from web PDFs merge into one sentence:** a known limitation. Balanced mode with OCR helps.
 
 ## Development
