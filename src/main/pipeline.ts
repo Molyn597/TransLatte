@@ -21,7 +21,7 @@ import {
   translateGemmaPrompt,
   translateSystem,
 } from './prompts';
-import { hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
+import { findAnchors, hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
 import {
   acceptFix,
   applyDeterministic,
@@ -35,11 +35,13 @@ import {
 import { ensureDictionary } from './spell';
 import { SpellWorker, spellWorkerPath } from './spell-client';
 import {
+  attachLinks,
   blocksToSegments,
   dropRepeatedBlocks,
   finalText,
   groupSegments,
   layoutToBlocks,
+  linkAnchors,
   markDuplicateBlocks,
   markdownToBlocks,
   mergeAcrossPages,
@@ -244,10 +246,11 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
     for (const p of selected) texts.push(await pageText(docId, p));
     ctx.pages = new Map(texts.map(({ view, rotate, width, height, invisible }, i) => [selected[i], { view, rotate, width, height, invisible }]));
     const content = removePageFurniture(texts);
-    const layouts = texts.map(({ items, width }, i) => ({
+    const layouts = texts.map(({ items, width, links }, i) => ({
       page: selected[i],
       items: content[i],
       width,
+      links: linkAnchors(content[i], links, selected[i]),
       blocks: layoutToBlocks(content[i], width, selected[i]),
       scanned: items.reduce((n, it) => n + it.str.trim().length, 0) < SCAN_TEXT_CHARS,
     }));
@@ -264,6 +267,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       check(ctx.signal);
       const p = layout.page;
       if (!ocrPages.includes(p)) {
+        attachLinks(layout.blocks, layout.links);
         blocks.push(...layout.blocks);
         continue;
       }
@@ -293,6 +297,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
         result = result.filter((b) => b.kind === 'table' || wordOverlap(reference, b.text).precision >= 0.5);
         textLayerGeometry(result, layout.items, layout.width);
       }
+      attachLinks(result, layout.links);
       blocks.push(...result);
       done++;
     }
@@ -364,6 +369,17 @@ async function translateTable(ctx: JobContext, table: string) {
     .join('\n');
 }
 
+/** Texty odkazů se překládají zvlášť, aby šly v překladu odstavce najít. Odkaz přes celý odstavec nebo bez písmen (adresa) ne. */
+async function translateLinks(ctx: JobContext, segments: Segment[]) {
+  const links = segments.flatMap((s) => (s.links ?? []).filter((l) => /\p{L}{2}/u.test(l.source) && !/^(https?:|www\.)/i.test(l.source) && l.source !== s.source));
+  const unique = [...new Set(links.map((l) => l.source))];
+  if (!unique.length) return;
+  const batch = splitBatch(await translateText(ctx, unique.join('\n\n')), unique.length);
+  const translated = new Map<string, string>();
+  for (const [i, text] of unique.entries()) translated.set(text, stripAddedPeriod(text, batch ? batch[i] : await translateText(ctx, text)));
+  for (const link of links) link.target = translated.get(link.source);
+}
+
 const looksWrong = (source: string, out: string) => !out || suspiciousLength(source, out) || hasRepetition(out);
 
 /** Část odstavce k překladu; dlouhé odstavce se dělí po větách, aby šly zpracovat souběžně. */
@@ -420,6 +436,7 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
   await ensureModel(ctx.settings.models.translate, ID.translate);
   report(0);
   const tasks: (() => Promise<void>)[] = [
+    () => translateLinks(ctx, segments),
     ...segments
       .filter((s) => s.kind === 'table')
       .map((table) => async () => {
@@ -629,6 +646,12 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
       // Ukončení workeru uvolní ~380 MB slovníku.
       await speller?.terminate();
     }
+  }
+
+  for (const seg of segments) {
+    if (!seg.links) continue;
+    const found = findAnchors(finalText(seg), seg.links, seg.source);
+    addNotes(seg, seg.links.filter((_, i) => !found[i]).map((l) => `Odkaz „${l.source}“ se v překladu nenašel, v přeloženém PDF ani ve Wordu nebude klikací.`));
   }
 
   ctx.progress({ stage: 'write', done: 0, total: 0 });

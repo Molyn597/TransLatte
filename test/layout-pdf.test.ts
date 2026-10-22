@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import fontkit from '@pdf-lib/fontkit';
-import { degrees, PDFDocument } from 'pdf-lib';
+import { degrees, PDFArray, PDFDict, PDFDocument, PDFName, PDFString } from 'pdf-lib';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   backgroundColor,
@@ -10,6 +10,9 @@ import {
   fitTable,
   fitText,
   inkDifference,
+  lineRuns,
+  linkStyle,
+  wordMarks,
   visiblePart,
   splitText,
   tableRows,
@@ -210,5 +213,70 @@ describe('buildLayoutPdf', () => {
     expect([...result.overflow.keys()].map((s) => s.id)).toEqual([1]);
     const out = await PDFDocument.load(result.pdf);
     expect(out.getPageCount()).toBe(2);
+  });
+});
+
+describe('odkazy', () => {
+  it('rozdělí řádek na úseky odkazu po znacích, mezera patří jen dovnitř odkazu', () => {
+    const text = 'viz zprávu Bersin, dnes';
+    const marks = wordMarks(text, [{ start: 4, end: 17 }]);
+    expect(lineRuns(['viz', 'zprávu', 'Bersin,', 'dnes'], marks)).toEqual([{ text: 'viz ' }, { text: 'zprávu Bersin', link: 0 }, { text: ', dnes' }]);
+  });
+
+  it('pozná modrou barvu a podtržení', () => {
+    const width = 40;
+    const height = 20;
+    const data = new Uint8Array(width * height * 4).fill(255);
+    const paint = (x: number, y: number) => data.set([20, 60, 200, 255], (y * width + x) * 4);
+    for (let y = 4; y < 12; y++) for (let x = 5; x < 35; x += 2) paint(x, y);
+    for (let x = 5; x < 35; x++) paint(x, 15);
+    const style = linkStyle({ width, height, data }, { x: 2, y: 2, w: 36, h: 16 });
+    expect(style.underline).toBe(true);
+    expect(style.color![2]).toBeGreaterThan(0.7);
+    expect(linkStyle({ width, height, data: new Uint8Array(width * height * 4).fill(255) }, { x: 2, y: 2, w: 36, h: 16 })).toEqual({ underline: false });
+  });
+
+  it('přesune anotaci odkazu na nové místo, nenalezený a cizí nad textem odstraní', async () => {
+    const source = await PDFDocument.create();
+    const page = source.addPage([600, 800]);
+    const link = (rect: number[], uri: string) =>
+      source.context.register(
+        source.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: rect, A: { S: 'URI', URI: PDFString.of(uri) } }),
+      );
+    // Viewport y 50–62 → PDF y 738–750.
+    page.node.addAnnot(link([200, 738, 260, 750], 'https://found'));
+    page.node.addAnnot(link([100, 738, 150, 750], 'https://missing'));
+    page.node.addAnnot(link([300, 738, 340, 750], 'https://foreign'));
+    page.node.addAnnot(link([10, 10, 50, 20], 'https://footer'));
+    const input = await source.save();
+    const pages = new Map<number, PageGeometry>([[1, { view: [0, 0, 600, 800], rotate: 0, width: 600, height: 800 }]]);
+    const segments: Segment[] = [
+      {
+        id: 0,
+        kind: 'paragraph',
+        source: 'Read our report on the new site',
+        translation: 'Přečtěte si naši zprávu na novém webu',
+        rects: [{ page: 1, x: 50, y: 50, w: 400, h: 14 }],
+        fontSize: 10,
+        links: [
+          { url: 'https://found', source: 'report', target: 'zpráva', rects: [{ page: 1, x: 200, y: 50, w: 60, h: 12 }] },
+          { url: 'https://missing', source: 'nothing', target: 'nic', rects: [{ page: 1, x: 100, y: 50, w: 50, h: 12 }] },
+        ],
+      },
+    ];
+    const white = { width: 600, height: 800, data: new Uint8Array(600 * 800 * 4).fill(255) };
+    const result = await buildLayoutPdf(input, segments, pages, { fontsDir: FONTS, pageImage: async () => white, text: (s) => s.translation ?? '' });
+    const out = await PDFDocument.load(result.pdf);
+    const annots = out.getPage(0).node.Annots()!;
+    const found = Array.from({ length: annots.size() }, (_, k) => annots.lookup(k, PDFDict)).map((a) => ({
+      uri: (a.lookup(PDFName.of('A'), PDFDict).lookup(PDFName.of('URI')) as PDFString).decodeText(),
+      rect: a.lookup(PDFName.of('Rect'), PDFArray).asRectangle(),
+    }));
+    expect(found.map((f) => f.uri).sort()).toEqual(['https://footer', 'https://found']);
+    const moved = found.find((f) => f.uri === 'https://found')!.rect;
+    // „zprávu“ je třetí slovo, začíná vpravo od „Přečtěte si naši“ a leží na prvním řádku.
+    expect(moved.x).toBeGreaterThan(70);
+    expect(moved.x).toBeLessThan(150);
+    expect(moved.y).toBeGreaterThan(730);
   });
 });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { TextItem } from '../src/shared/pdf';
 import {
+  attachLinks,
+  linkAnchors,
   blocksToSegments,
   groupSegments,
   layoutToBlocks,
@@ -17,6 +19,7 @@ import {
   splitBatch,
   stripAddedPeriod,
   textLayerGeometry,
+  type Block,
 } from '../src/main/segments';
 
 describe('parseOcr', () => {
@@ -352,5 +355,35 @@ describe('geometrie bloků pro přeložené PDF', () => {
     ]);
     expect(heading.rects).toHaveLength(2);
     expect(blocksToSegments([merged])[0].rects).toHaveLength(2);
+  });
+});
+
+describe('odkazy z anotací', () => {
+  const item = (str: string, x: number, y: number, w: number): TextItem => ({ str, x, y, w, h: 10 });
+
+  it('vezme slova v ploše odkazu a spojí odkaz zalomený přes řádek', () => {
+    // 10 bodů na znak.
+    const items = [item('Read the great report', 0, 0, 210), item('by Bersin today.', 0, 12, 160)];
+    const links = [
+      { url: 'http://b.com', x: 0, y: 12, w: 90, h: 11 },
+      { url: 'http://b.com', x: 140, y: -1, w: 70, h: 11 },
+      { url: 'http://site.com', x: 0, y: -10, w: 300, h: 40 },
+    ];
+    const [link, ...rest] = linkAnchors(items, links, 3);
+    expect(rest).toEqual([]);
+    expect(link.source).toBe('report by Bersin');
+    expect(link.url).toBe('http://b.com');
+    expect(link.rects.map((r) => [r.page, r.y])).toEqual([[3, -1], [3, 12]]);
+  });
+
+  it('odkaz přiřadí bloku, ve kterém leží', () => {
+    const blocks: Block[] = [
+      { kind: 'paragraph', text: 'A', rects: [{ page: 1, x: 0, y: 0, w: 100, h: 20 }] },
+      { kind: 'paragraph', text: 'B', rects: [{ page: 1, x: 0, y: 50, w: 100, h: 20, cover: [[0, 50, 100, 12]] as [number, number, number, number][] }] },
+    ];
+    const link = { source: 'B', rects: [{ page: 1, x: 10, y: 50, w: 20, h: 10 }] };
+    attachLinks(blocks, [link]);
+    expect(blocks[1].links).toEqual([link]);
+    expect(blocks[0].links).toBeUndefined();
   });
 });

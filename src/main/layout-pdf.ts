@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import fontkit from '@pdf-lib/fontkit';
-import { PDFDocument, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
-import type { Rect, Segment } from '../shared/types';
+import { PDFArray, PDFDict, PDFDocument, PDFName, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
+import type { Rect, Segment, SegmentLink } from '../shared/types';
+import { findAnchors, type AnchorRange } from './quality';
 
 /** Výřez a otočení stránky z pdf.js; rozměry viewportu při scale 1. */
 export interface PageGeometry {
@@ -324,6 +325,74 @@ export function blankBelow(image: PageImage, rect: Box, color: Color, px: number
   return Math.max(0, (y - start) / px);
 }
 
+export interface LinkStyle {
+  /** Barva odkazu, když se liší od běžného (šedého) písma. */
+  color?: Color;
+  underline: boolean;
+}
+
+/** Barva a podtržení odkazu z vykreslené stránky: medián barvy písma v klikací ploše a řádek pixelů přes celou šířku písma. */
+export function linkStyle(image: PageImage, box: Box): LinkStyle {
+  const [br, bg, bb] = backgroundColor(image, box).map((v) => v * 255);
+  const x0 = Math.max(0, Math.floor(box.x));
+  const y0 = Math.max(0, Math.floor(box.y));
+  const x1 = Math.min(image.width, Math.ceil(box.x + box.w));
+  const y1 = Math.min(image.height, Math.ceil(box.y + box.h));
+  const ink: { rgb: number[]; distance: number }[] = [];
+  const rows = new Map<number, number>();
+  let left = Infinity;
+  let right = -Infinity;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * image.width + x) * 4;
+      const distance = Math.abs(image.data[i] - br) + Math.abs(image.data[i + 1] - bg) + Math.abs(image.data[i + 2] - bb);
+      if (distance < 150) continue;
+      ink.push({ rgb: [image.data[i], image.data[i + 1], image.data[i + 2]], distance });
+      rows.set(y, (rows.get(y) ?? 0) + 1);
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+    }
+  }
+  if (!ink.length) return { underline: false };
+  // Vyhlazené okraje písma barvu zesvětlují, proto jen sytější polovina pixelů.
+  const solid = ink.sort((a, b) => b.distance - a.distance).slice(0, Math.ceil(ink.length / 2));
+  const color = [0, 1, 2].map((c) => median(solid.map((p) => p.rgb[c]))! / 255) as Color;
+  const colorful = Math.max(...color) - Math.min(...color) > 0.2;
+  const middle = (y0 + y1) / 2;
+  const underline = [...rows].some(([y, n]) => y > middle && n >= (right - left + 1) * 0.8);
+  return { ...(colorful && { color }), underline };
+}
+
+/** Pro každé slovo textu (dělení podle mezer jako ve wrapText) index odkazu u každého znaku. */
+export function wordMarks(text: string, ranges: (AnchorRange | null)[]): (number | undefined)[][] {
+  return [...text.matchAll(/\S+/g)].map((m) =>
+    Array.from(m[0], (_, c) => {
+      const at = m.index + c;
+      const link = ranges.findIndex((r) => r && at >= r.start && at < r.end);
+      return link < 0 ? undefined : link;
+    }),
+  );
+}
+
+/** Řádek rozdělený na úseky stejného odkazu; mezera patří odkazu, jen když je uvnitř něj. */
+export function lineRuns(words: string[], marks: (number | undefined)[][]): { text: string; link?: number }[] {
+  const runs: { text: string; link?: number }[] = [];
+  const push = (text: string, link: number | undefined) => {
+    const last = runs[runs.length - 1];
+    if (last && last.link === link) last.text += text;
+    else runs.push(link === undefined ? { text } : { text, link });
+  };
+  words.forEach((word, i) => {
+    const own = marks[i] ?? [];
+    if (i) {
+      const before = (marks[i - 1] ?? [])[words[i - 1].length - 1];
+      push(' ', before !== undefined && before === own[0] ? before : undefined);
+    }
+    for (let c = 0; c < word.length; c++) push(word[c], own[c]);
+  });
+  return runs;
+}
+
 // Písmo Noto nemá všechny symboly; řídicí znaky a tabulátory by pdf-lib vypsal jako prázdné glyfy.
 const clean = (text: string) => text.replace(/\t/g, ' ').replace(/[\u0000-\u0009\u000b-\u001f\u007f­​-‏﻿]/g, '');
 
@@ -364,6 +433,9 @@ interface Placement {
   /** Prázdné místo (body) pod obdélníkem, které smí odstavec využít, než zmenší písmo. */
   room: number;
   text: string;
+  /** Pořadí prvního slova části v celém textu segmentu (index do `marks`). */
+  firstWord: number;
+  marks: (number | undefined)[][];
 }
 
 /**
@@ -415,7 +487,9 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
   };
   const items = segments
     .map((segment) => ({ segment, rects: segment.rects?.filter(usable) ?? [], text: clean(options.text(segment)).trim() }))
-    .filter((i) => i.rects.length && i.text);
+    .filter((i) => i.rects.length && i.text)
+    .map((i) => ({ ...i, marks: i.segment.links && i.segment.kind !== 'table' ? wordMarks(i.text, findAnchors(i.text, i.segment.links, i.segment.source)) : [] }));
+  const styles = new Map<SegmentLink, LinkStyle>();
 
   // Viditelnost a barva pozadí stránku po stránce (vykreslení se hned zahodí).
   const shown = new Map<Rect, { rect: Rect; color: Color; ruled: boolean; room: number }>();
@@ -424,6 +498,10 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     const full = await options.pageImage(number, false);
     const bare = geometry.invisible ? full : await options.pageImage(number, true);
     const px = full.width / geometry.width;
+    for (const link of items.flatMap((i) => i.segment.links ?? [])) {
+      const r = link.rects.find((o) => o.page === number);
+      if (r && !styles.has(link)) styles.set(link, linkStyle(full, { x: r.x * px, y: r.y * px, w: r.w * px, h: r.h * px }));
+    }
     for (const rect of items.flatMap((i) => i.rects).filter((r) => r.page === number)) {
       const visible = visiblePart(rect, geometry, full, bare);
       if (!visible) continue;
@@ -441,16 +519,21 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
   }
 
   const byPage = new Map<number, Placement[]>();
-  for (const { segment, rects, text } of items) {
+  for (const { segment, rects, text, marks } of items) {
     const visible = rects.filter((r) => shown.has(r));
     if (!visible.length) continue;
     const parts = segment.kind === 'table' ? [text, ...visible.slice(1).map(() => '')] : splitText(text, visible.map((r) => r.chars ?? r.w * r.h));
+    let firstWord = 0;
     visible.forEach((original, i) => {
       const { rect, color, ruled, room } = shown.get(original)!;
       if (!byPage.has(rect.page)) byPage.set(rect.page, []);
-      byPage.get(rect.page)!.push({ segment, rect, color, ruled, right: rect.x + rect.w, room, text: parts[i] });
+      byPage.get(rect.page)!.push({ segment, rect, color, ruled, right: rect.x + rect.w, room, text: parts[i], firstWord, marks });
+      firstWord += parts[i].split(/\s+/).filter(Boolean).length;
     });
   }
+
+  // Nová místa odkazů v přeloženém textu (souřadnice PDF).
+  const pieces = new Map<SegmentLink, { page: number; x: number; y: number; width: number; height: number }[]>();
 
   for (const [number, placements] of byPage) {
     const geometry = pages.get(number)!;
@@ -469,7 +552,7 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     }
     // Odhad velikosti písma z OCR kolísá blok od bloku; odstavce na stránce se drží kolem mediánu.
     const bodySize = median(placements.filter((p) => p.segment.kind === 'paragraph' && p.segment.fontSize).map((p) => p.segment.fontSize!));
-    for (const { segment, rect, color: background, ruled, right, room, text } of placements) {
+    for (const { segment, rect, color: background, ruled, right, room, text, firstWord, marks } of placements) {
       if (!text) continue;
       const color = luminance(background) < 0.5 ? rgb(1, 1, 1) : rgb(0, 0, 0);
       const regular = await font(segment.serif ? 'serif' : 'sans');
@@ -533,13 +616,86 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
         const extra = Math.max(0, room - size * 0.8);
         const fitted = fitText(text, { w: rect.w, h: rect.h + extra }, size, (t, s) => main.widthOfTextAtSize(t, s), single ? right - rect.x : undefined);
         fits = fitted.fits;
+        let word = firstWord;
         fitted.lines.forEach((line, l) => {
           const indent = segment.centered ? Math.max(0, (rect.w - main.widthOfTextAtSize(line, fitted.size)) / 2) : 0;
-          page.drawText(line, { x: x + indent, y: top - fitted.size * (0.85 + l * LINE), size: fitted.size, font: main, color });
+          const words = line.split(' ');
+          const lineMarks = marks.slice(word, word + words.length);
+          word += words.length;
+          const y = top - fitted.size * (0.85 + l * LINE);
+          if (!lineMarks.some((m) => m.some((v) => v !== undefined))) {
+            page.drawText(line, { x: x + indent, y, size: fitted.size, font: main, color });
+            return;
+          }
+          // Řádek s odkazem se kreslí po úsecích, odkaz ve své barvě a případně podtržený.
+          let cx = x + indent;
+          for (const run of lineRuns(words, lineMarks)) {
+            const width = main.widthOfTextAtSize(run.text, fitted.size);
+            const link = run.link === undefined ? undefined : segment.links![run.link];
+            const style = link && styles.get(link);
+            const ink = style?.color ? rgb(...style.color) : color;
+            page.drawText(run.text, { x: cx, y, size: fitted.size, font: main, color: ink });
+            if (link) {
+              if (style?.underline) {
+                const uy = y - fitted.size * 0.12;
+                page.drawLine({ start: { x: cx, y: uy }, end: { x: cx + width, y: uy }, thickness: Math.max(0.5, fitted.size * 0.06), color: ink });
+              }
+              if (!pieces.has(link)) pieces.set(link, []);
+              pieces.get(link)!.push({ page: number, x: cx, y: y - fitted.size * 0.25, width, height: fitted.size * 1.15 });
+            }
+            cx += width;
+          }
         });
       }
       if (!fits) overflow.set(segment, [...new Set([...(overflow.get(segment) ?? []), number])]);
     }
   }
+  moveLinks(doc, pages, byPage, pieces);
   return { pdf: await doc.save(), overflow, rotated: [...rotated].sort((a, b) => a - b) };
+}
+
+type Piece = { page: number; x: number; y: number; width: number; height: number };
+
+/**
+ * Klikací plochy odkazů na nové místo: původní anotace odkazu se nahradí kopií na každém řádku překladu.
+ * Odkaz, který se v překladu nenašel, a cizí odkaz nad přemalovaným textem se odstraní (kliknutí by trefilo jiné slovo).
+ */
+function moveLinks(doc: PDFDocument, pages: Map<number, PageGeometry>, byPage: Map<number, Placement[]>, pieces: Map<SegmentLink, Piece[]>) {
+  const templates = new Map<SegmentLink, PDFDict>();
+  for (const [number, placements] of byPage) {
+    const { view } = pages.get(number)!;
+    const annots = doc.getPage(number - 1).node.Annots();
+    if (!annots) continue;
+    const placed = placements.flatMap((p) => p.segment.links ?? []);
+    const covered = placements.flatMap((p) => (p.rect.cover ?? [[p.rect.x, p.rect.y, p.rect.w, p.rect.h]]).map(([x, y, w, h]) => toPdfRect({ x, y, w, h }, view)));
+    for (let k = annots.size() - 1; k >= 0; k--) {
+      const annot = annots.lookup(k);
+      if (!(annot instanceof PDFDict) || annot.get(PDFName.of('Subtype'))?.toString() !== '/Link') continue;
+      const rect = annot.lookupMaybe(PDFName.of('Rect'), PDFArray)?.asRectangle();
+      if (!rect) continue;
+      const near = (o: Rect) => {
+        const r = toPdfRect(o, view);
+        return Math.abs(r.x - rect.x) < 1 && Math.abs(r.y - rect.y) < 1 && Math.abs(r.width - rect.width) < 1 && Math.abs(r.height - rect.height) < 1;
+      };
+      const owner = placed.find((l) => l.rects.some((o) => o.page === number && near(o)));
+      const cx = rect.x + rect.width / 2;
+      const cy = rect.y + rect.height / 2;
+      if (owner) {
+        if (!templates.has(owner)) templates.set(owner, annot);
+        annots.remove(k);
+      } else if (covered.some((c) => cx >= c.x && cx <= c.x + c.width && cy >= c.y && cy <= c.y + c.height)) annots.remove(k);
+    }
+  }
+  for (const [link, list] of pieces) {
+    const template = templates.get(link);
+    if (!template) continue;
+    for (const piece of list) {
+      const page = doc.getPage(piece.page - 1);
+      const copy = template.clone(doc.context);
+      copy.set(PDFName.of('Rect'), doc.context.obj([piece.x, piece.y, piece.x + piece.width, piece.y + piece.height]));
+      copy.delete(PDFName.of('QuadPoints'));
+      copy.set(PDFName.of('P'), page.ref);
+      page.node.addAnnot(doc.context.register(copy));
+    }
+  }
 }

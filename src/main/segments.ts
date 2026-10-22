@@ -1,5 +1,5 @@
-import type { TextItem } from '../shared/pdf';
-import type { Rect, Segment, SegmentKind } from '../shared/types';
+import type { LinkArea, TextItem } from '../shared/pdf';
+import type { Rect, Segment, SegmentKind, SegmentLink } from '../shared/types';
 
 export interface Block {
   kind: SegmentKind;
@@ -17,6 +17,7 @@ export interface Block {
   /** Tabulka z OCR přišla bez buněk (LM Studio zahazuje tokeny <tr>/<td> DeepSeek-OCR). */
   needsRepair?: boolean;
   warning?: string;
+  links?: SegmentLink[];
 }
 
 const LIST_LINE = /^\s*([-*•–]|\d+[.)])\s+/;
@@ -348,6 +349,55 @@ export function layoutToBlocks(items: TextItem[], pageWidth: number, page: numbe
   return [above, left, right, below].flatMap((group) => linesToBlocks(toLines(group), page, pageMetrics));
 }
 
+/** Slova textové položky s odhadnutým středem; šířka znaku se bere úměrně délce položky. */
+function itemWords(item: TextItem) {
+  const per = item.str.length ? item.w / item.str.length : 0;
+  return [...item.str.matchAll(/\S+/g)].map((m) => ({ text: m[0], x: item.x + (m.index + m[0].length / 2) * per, y: item.y + item.h / 2, h: item.h }));
+}
+
+/**
+ * Text odkazů na stránce: slova textové vrstvy, jejichž střed leží v klikací ploše.
+ * Odkaz zalomený přes řádek má anotaci na každém řádku, ty se spojí.
+ */
+export function linkAnchors(items: TextItem[], links: LinkArea[], page: number): SegmentLink[] {
+  const words = items.flatMap(itemWords);
+  const result: SegmentLink[] = [];
+  for (const link of [...links].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const inside = words.filter((w) => w.x >= link.x && w.x <= link.x + link.w && w.y >= link.y && w.y <= link.y + link.h);
+    if (!inside.length) continue;
+    const lineHeight = median(inside.map((w) => w.h));
+    // Plocha přes několik řádků (lišta webu, logo) není odkaz v textu.
+    if (link.h > lineHeight * 2.5) continue;
+    const text = inside
+      .sort((a, b) => (Math.abs(a.y - b.y) > lineHeight / 2 ? a.y - b.y : a.x - b.x))
+      .map((w) => w.text)
+      .join(' ');
+    const rect: Rect = { page, x: round(link.x), y: round(link.y), w: round(link.w), h: round(link.h) };
+    const prev = result[result.length - 1];
+    const last = prev?.rects[prev.rects.length - 1];
+    if (prev && link.url && prev.url === link.url && last && rect.y - last.y > lineHeight * 0.5 && rect.y - last.y < lineHeight * 2.5) {
+      prev.source = /\p{L}-$/u.test(prev.source) && /^\p{Ll}/u.test(text) ? prev.source.slice(0, -1) + text : `${prev.source} ${text}`;
+      prev.rects.push(rect);
+    } else result.push({ ...(link.url && { url: link.url }), source: text, rects: [rect] });
+  }
+  return result;
+}
+
+/** Odkazy se přiřadí bloku, v jehož ploše řádků leží začátek odkazu (tabulky se překládají po buňkách, ty ne). */
+export function attachLinks(blocks: Block[], links: SegmentLink[]) {
+  for (const link of links) {
+    const r = link.rects[0];
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    const block = blocks.find(
+      (b) =>
+        b.kind !== 'table' &&
+        b.rects?.some((rect) => rect.page === r.page && (rect.cover ?? [[rect.x, rect.y, rect.w, rect.h]]).some(([x, y, w, h]) => cx >= x - 2 && cx <= x + w + 2 && cy >= y - 2 && cy <= y + h + 2)),
+    );
+    if (block) (block.links ??= []).push(link);
+  }
+}
+
 /**
  * Záhlaví a zápatí: krátký text na stejném místě na více stránkách (lišta webu, název časopisu)
  * a samotná čísla stránek u horního nebo dolního okraje.
@@ -431,6 +481,7 @@ export function mergeBrokenHeadings(blocks: Block[]): Block[] {
 
 function joinRects(into: Block, from: Block) {
   if (into.rects || from.rects) into.rects = [...(into.rects ?? []), ...(from.rects ?? [])];
+  if (into.links || from.links) into.links = [...(into.links ?? []), ...(from.links ?? [])];
 }
 
 const normalized = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(' ');
@@ -471,6 +522,7 @@ export function blocksToSegments(blocks: Block[]): Segment[] {
       ...(b.warning && { warning: b.warning }),
       ...(b.rects?.length && { rects: b.rects, fontSize: b.fontSize, serif: b.serif, bold: b.bold, centered: b.centered }),
       ...(b.layoutOnly && { layoutOnly: true }),
+      ...(b.links?.length && { links: b.links }),
     }));
 }
 

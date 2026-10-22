@@ -1,6 +1,6 @@
 // Skryté okno: pdf.js potřebuje canvas a web worker, které hlavní proces nemá.
 import { getDocument, GlobalWorkerOptions, OPS, type PDFDocumentLoadingTask, type PDFDocumentProxy } from 'pdfjs-dist';
-import { PDFJS_OPTIONS, type PdfBridge, type PdfTask, type TextItem } from '../shared/pdf';
+import { PDFJS_OPTIONS, type LinkArea, type PdfBridge, type PdfTask, type TextItem } from '../shared/pdf';
 
 declare global {
   interface Window {
@@ -66,8 +66,14 @@ async function run(task: PdfTask): Promise<unknown> {
         }
         items.forEach((item, i) => (item.bold = bold.get(fonts[i])));
       }
+      const links: LinkArea[] = [];
+      for (const a of await page.getAnnotations({ intent: 'display' })) {
+        if (a.subtype !== 'Link' || !a.rect) continue;
+        const [x0, y0, x1, y1] = a.rect as number[];
+        links.push({ ...(a.url && { url: a.url as string }), x: Math.min(x0, x1) - vx, y: vy - Math.max(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) });
+      }
       page.cleanup();
-      return { items, width: viewport.width, height: viewport.height, view: [...page.view], rotate: page.rotate, invisible };
+      return { items, width: viewport.width, height: viewport.height, view: [...page.view], rotate: page.rotate, invisible, links };
     }
     case 'render': {
       const page = await doc(task.docId).getPage(task.page);

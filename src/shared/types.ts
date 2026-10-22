@@ -18,6 +18,18 @@ export interface Rect {
   cover?: [number, number, number, number][];
 }
 
+/** Odkaz v textu segmentu (z anotace Link v PDF). */
+export interface SegmentLink {
+  /** Bez URL je to odkaz na místo v dokumentu (jen v PDF). */
+  url?: string;
+  /** Text odkazu v originálu. */
+  source: string;
+  /** Text odkazu přeložený zvlášť; podle něj se odkaz hledá v překladu. */
+  target?: string;
+  /** Klikací plochy originálu, u odkazu zalomeného přes řádek víc. */
+  rects: Rect[];
+}
+
 export interface Segment {
   id: number;
   kind: SegmentKind;
@@ -39,6 +51,7 @@ export interface Segment {
   centered?: boolean;
   /** Jen pro přeložené PDF (zvýrazněný citát opakující větu z článku); jinde se nezobrazuje. */
   layoutOnly?: boolean;
+  links?: SegmentLink[];
 }
 
 export interface Progress {

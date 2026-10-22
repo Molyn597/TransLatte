@@ -11,6 +11,16 @@ export interface TextItem {
   bold?: boolean;
 }
 
+/** Klikací plocha odkazu (anotace Link) ve stejných souřadnicích jako TextItem. */
+export interface LinkArea {
+  /** Bez URL je to odkaz na místo v dokumentu. */
+  url?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export type PdfTask =
   | { op: 'open'; docId: string; data: Uint8Array }
   | { op: 'text'; docId: string; page: number }
@@ -31,6 +41,7 @@ export interface PdfTextResult {
   rotate: number;
   /** Text stránky je neviditelný (textová vrstva OCR nad skenem). */
   invisible: boolean;
+  links: LinkArea[];
 }
 
 /** PNG jako data URL, rovnou použitelné pro vision model. */
