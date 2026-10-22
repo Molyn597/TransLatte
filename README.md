@@ -1,110 +1,110 @@
 # TransLatte
 
-Lokální překladač PDF a dokumentů. Překládá na tvém počítači přes modely v [LM Studiu](https://lmstudio.ai), takže text nikam neodchází. Výsledkem je dokument Word (.docx), text v Markdownu a u PDF i přeložené PDF, které vypadá jako originál.
+A local translator for PDFs and documents. It translates on your own computer using models in [LM Studio](https://lmstudio.ai), so your text never leaves the machine. The output is a Word document (.docx), Markdown text and, for PDFs, a translated PDF that looks like the original.
 
-## Co potřebuješ
+## What you need
 
-- **macOS** (Apple Silicon i Intel) nebo **Windows 10/11** (x64 i ARM).
-- **Mac s 16 GB+ paměti, nebo PC s grafikou s 8 GB+ VRAM a 16 GB+ RAM.** Podrobnosti v části [Požadavky na hardware](#požadavky-na-hardware).
-- **Zhruba 20 GB volného místa** na modely.
-- **LM Studio** se staženými modely (viz níže).
+- **macOS** (Apple Silicon or Intel) or **Windows 10/11** (x64 or ARM).
+- **A Mac with 16 GB+ memory, or a PC with an 8 GB+ VRAM graphics card and 16 GB+ RAM.** See [Hardware requirements](#hardware-requirements).
+- **About 20 GB of free disk space** for the models.
+- **LM Studio** with the models downloaded (see below).
 
-## Požadavky na hardware
+## Hardware requirements
 
-Modely běží na grafice. V paměti je vždy jen jeden, aplikace je střídá podle fáze překladu. Každý 12B model potřebuje zhruba 9–11 GB: soubor modelu (7–8 GB) plus místo pro kontext, protože aplikace pracuje s kontextem 16 tisíc tokenů a posílá až 4 požadavky najednou.
+The models run on the GPU. Only one model is in memory at a time; the app swaps them as the translation moves through its stages. Each 12B model needs roughly 9–11 GB: the model file (7–8 GB) plus room for the context, because the app uses a 16k-token context and sends up to 4 requests at once.
 
-| Počítač | Jak poběží |
+| Computer | How it runs |
 | --- | --- |
-| Mac s Apple Silicon a 24 GB+, PC s 16 GB+ VRAM | Doporučeno, model se vejde celý i s rezervou. |
-| Mac s 16 GB, PC s 12 GB VRAM a 16 GB RAM | Funguje. Během překladu nepoužívej další náročné aplikace. |
-| PC s 8 GB VRAM a 16–32 GB RAM | Funguje pomaleji, část modelu běží z RAM. |
-| PC bez samostatné grafiky, Mac s 8 GB | Nevhodné. Jen na procesoru trvá několikastránkový dokument desítky minut. |
+| Apple Silicon Mac with 24 GB+, PC with 16 GB+ VRAM | Recommended; the model fits entirely with room to spare. |
+| Mac with 16 GB, PC with 12 GB VRAM and 16 GB RAM | Works. Avoid other heavy apps while translating. |
+| PC with 8 GB VRAM and 16–32 GB RAM | Works, but slower; part of the model runs from RAM. |
+| PC without a dedicated GPU, Mac with 8 GB | Not suitable. On the CPU alone a few pages take tens of minutes. |
 
-- **Mac:** grafika sdílí paměť se systémem a macOS jí nechá zhruba dvě třetiny až tři čtvrtiny. Proto je 16 GB minimum. Intel Macy s grafikou AMD nejsou vyzkoušené.
-- **Windows:** LM Studio rozdělí model mezi grafiku a RAM samo. Když se model nenačte nebo systém začne být nepoužitelný, otevři v LM Studiu nastavení modelu (**My Models** → ozubené kolečko u modelu) a sniž **GPU Offload**. Méně vrstev na grafice znamená menší nároky na VRAM, ale pomalejší překlad.
-- **Slabší a silnější počítače:** TranslateGemma existuje i ve velikosti 4B (pro 6–8 GB VRAM, horší kvalita) a 27B (pro 24 GB VRAM, lepší kvalita). Po stažení ji vyber v **Nastavení → Překlad**. Tyto velikosti zatím nejsou s TransLatte vyzkoušené.
+- **Mac:** the GPU shares memory with the system and macOS gives it roughly two thirds to three quarters of it, so 16 GB is the minimum. Intel Macs with AMD graphics have not been tested.
+- **Windows:** LM Studio splits the model between GPU and RAM on its own. If a model fails to load or the system becomes unusable, open the model settings in LM Studio (**My Models** → gear icon next to the model) and lower **GPU Offload**. Fewer layers on the GPU means less VRAM but slower translation.
+- **Weaker and stronger machines:** TranslateGemma also comes in 4B (for 6–8 GB VRAM, lower quality) and 27B (for 24 GB VRAM, better quality). After downloading, select it in **Nastavení → Překlad** (Settings → Translation). These sizes have not been tested with TransLatte yet.
 
-Uvedené nároky jsou odhad. Ověřené jsou na MacBooku Air M-series s 16 GB.
+These requirements are estimates. They have been verified on a 16 GB Apple Silicon MacBook Air.
 
-## Instalace
+## Installation
 
-### 1. LM Studio a modely
+### 1. LM Studio and models
 
-1. Stáhni a nainstaluj LM Studio z <https://lmstudio.ai> a jednou ho spusť.
-2. V LM Studiu otevři vyhledávání modelů (lupa vlevo) a stáhni tyto modely:
+1. Download and install LM Studio from <https://lmstudio.ai> and run it once.
+2. Open the model search in LM Studio (magnifier icon on the left) and download these models:
 
-   | K čemu | Model (hledej v LM Studiu) | Varianta | Velikost |
+   | Purpose | Model (search in LM Studio) | Variant | Size |
    | --- | --- | --- | --- |
-   | Překlad | `mradermacher/translategemma-12b-it-GGUF` | Q4_K_S | 7,8 GB |
-   | Opravy, kontext dokumentu a tabulky | `google/gemma-4-12b-qat` | Q4_0 | 7,2 GB |
-   | Čtení stránek (OCR) | `sahilchachra/Unlimited-OCR-GGUF` | Q8_0 | 3,9 GB |
+   | Translation | `mradermacher/translategemma-12b-it-GGUF` | Q4_K_S | 7.8 GB |
+   | Fixes, document context and tables | `google/gemma-4-12b-qat` | Q4_0 | 7.2 GB |
+   | Page reading (OCR) | `sahilchachra/Unlimited-OCR-GGUF` | Q8_0 | 3.9 GB |
 
-   Pro Rychlý režim u digitálních PDF stačí první dva. OCR model je potřeba pro skeny a pro Vyvážený a Kvalitní režim.
-3. Modely nemusíš ručně načítat ani zapínat server. TransLatte si server spustí a modely načte samo, vždy jen ten, který právě potřebuje.
+   For Fast mode on digital PDFs the first two are enough. The OCR model is needed for scans and for Balanced and Quality modes.
+3. You don't need to load models or start the server yourself. TransLatte starts the server and loads models on its own, always only the one it currently needs.
 
 ### 2. TransLatte
 
-Instalátor stáhni z [Releases](https://github.com/Molyn597/TransLatte/releases).
+Download the installer from [Releases](https://github.com/Molyn597/TransLatte/releases).
 
-- **macOS:** soubor `TransLatte-…-mac-universal.dmg`. Otevři ho a přetáhni TransLatte do Aplikací. Aplikace není podepsaná certifikátem Apple, proto ji poprvé otevři **pravým tlačítkem → Otevřít** a potvrď.
-- **Windows:** soubor `TransLatte-…-win.exe`. Pokud Windows zobrazí „Systém Windows ochránil váš počítač“, klikni na **Další informace → Přesto spustit**. Aplikace se nainstaluje jen pro tvého uživatele a vytvoří zástupce na ploše.
+- **macOS:** `TransLatte-…-mac-universal.dmg`. Open it and drag TransLatte to Applications. The app is not signed with an Apple certificate, so the first time **right-click → Open** and confirm.
+- **Windows:** `TransLatte-…-win.exe`. If Windows shows "Windows protected your PC", click **More info → Run anyway**. The app installs for your user only and creates a desktop shortcut.
 
-### 3. První spuštění
+### 3. First run
 
-Stav spojení s LM Studiem je vidět v levém panelu (položka **LM Studio**). V **Nastavení** je u každé role (OCR, Překlad, Opravy) vybraný model. Pokud jsi stáhl modely z tabulky, je vše nastavené. Adresu serveru (`http://localhost:1234`) měň jen tehdy, když máš LM Studio na jiném portu nebo počítači.
+The connection status to LM Studio is shown in the left sidebar (the **LM Studio** item). In **Nastavení** (Settings) each role (OCR, translation, fixes) has a model selected. If you downloaded the models from the table, everything is set. Change the server address (`http://localhost:1234`) only if LM Studio runs on another port or machine.
 
-## Jak se překládá
+## How to translate
 
-1. Na záložce **Přeložit** přetáhni soubory (PDF, DOCX, TXT, MD), vyber jazyky a režim. U PDF můžeš omezit **Stránky PDF**, např. `1-5, 8`.
-2. Úloha jde do fronty a průběh i odhad času vidíš v části **Probíhá**.
-3. Hotový překlad najdeš v **Historii**. Detail úlohy má záložky:
-   - **Srovnání:** originál a překlad po odstavcích, s upozorněními na možné chyby.
-   - **Překlad:** jen přeložený text.
-   - **Překlad PDF** a **PDF vedle sebe:** přeložené PDF se zachovaným vzhledem, samostatně nebo vedle originálu.
-   - **Originál** a **Informace.**
+1. On the **Přeložit** (Translate) tab, drop files (PDF, DOCX, TXT, MD), pick the languages and a mode. For PDFs you can limit **Stránky PDF** (PDF pages), e.g. `1-5, 8`.
+2. The job is queued; progress and the time estimate appear under **Probíhá** (In progress).
+3. Finished translations are in **Historie** (History). The job detail has tabs:
+   - **Srovnání** (Comparison): original and translation paragraph by paragraph, with warnings about possible errors.
+   - **Překlad** (Translation): the translated text only.
+   - **Překlad PDF** and **PDF vedle sebe** (Translated PDF, side by side): the translated PDF with the original layout, on its own or next to the original.
+   - **Originál** and **Informace** (Original, Info).
 
-   Tlačítka **Otevřít Word** a **Otevřít PDF** otevřou výsledné soubory.
+   The **Otevřít Word** and **Otevřít PDF** buttons open the output files.
 
-### Režimy
+### Modes
 
-| Režim | Co dělá | Kdy ho použít |
+| Mode | What it does | When to use |
 | --- | --- | --- |
-| **Rychlý** | Text bere přímo z PDF, OCR jen u naskenovaných stránek. Chyby jen označí. | Běžné digitální PDF, výchozí volba. |
-| **Vyvážený** | OCR všech stránek (lepší pořadí odstavců a tabulky), kontrola a oprava chyb. | Složitější rozvržení, tabulky. |
-| **Kvalitní** | Navíc si přečte kontext dokumentu (téma, autor a jeho rod) pro přesnější opravy. | Texty, na kterých záleží. |
+| **Rychlý** (Fast) | Takes text straight from the PDF, OCR only for scanned pages. Only flags errors. | Ordinary digital PDFs; the default. |
+| **Vyvážený** (Balanced) | OCR of all pages (better paragraph order and tables), checks and fixes errors. | Complex layouts, tables. |
+| **Kvalitní** (Quality) | Also reads the document context (topic, author and their grammatical gender) for more accurate fixes. | Texts that matter. |
 
-## Jak to funguje uvnitř
+## How it works
 
-1. **Načtení:** z PDF se vezme text i rozvržení stránky (odstavce, nadpisy, tabulky, odkazy). Záhlaví, zápatí a čísla stránek se vynechají. Naskenované stránky přečte OCR model.
-2. **Překlad:** TranslateGemma překládá po odstavcích, několik požadavků najednou. Data jako `03-10-2014` se nejdřív převedou na jednoznačný tvar, aby se nespletl den a měsíc.
-3. **Kontrola:** bez modelu se hledají typické chyby: nepřeložená slova, chybějící termíny z glosáře, předložky (se/ze, ke/ve), pravopis přes slovník Hunspell a useknuté nebo opakující se věty. Slovník češtiny se stáhne při první kontrole.
-4. **Oprava:** ve Vyváženém a Kvalitním režimu Gemma opraví jen odstavce s nalezenými chybami, ostatní nechá být.
-5. **Zápis:** vznikne Word, Markdown a u PDF i přeložené PDF. V něm se původní text překryje barvou pozadí, překlad se vysází do stejného místa a odkazy zůstanou klikací.
+1. **Extraction:** text and page layout (paragraphs, headings, tables, links) are read from the PDF. Headers, footers and page numbers are skipped. Scanned pages are read by the OCR model.
+2. **Translation:** TranslateGemma translates paragraph by paragraph, several requests at once. Dates like `03-10-2014` are first rewritten into an unambiguous form so day and month don't get swapped.
+3. **Check:** typical errors are found without a model: untranslated words, missing glossary terms, Czech prepositions (se/ze, ke/ve), spelling via a Hunspell dictionary, and truncated or repeated sentences. The Czech dictionary is downloaded on first use.
+4. **Fix:** in Balanced and Quality modes Gemma rewrites only the paragraphs with errors and leaves the rest alone.
+5. **Output:** a Word file, Markdown and, for PDFs, a translated PDF. In it the original text is covered with the background colour, the translation is set in the same place and links stay clickable.
 
-Úlohy a výstupy jsou uložené ve složce aplikace:
+Jobs and outputs are stored in the app folder:
 
 - macOS: `~/Library/Application Support/TransLatte/jobs`
 - Windows: `%APPDATA%\TransLatte\jobs`
 
-## Glosář
+## Glossary
 
-Na záložce **Glosář** zadáš závazné překlady odborných termínů (např. *performance review → hodnocení výkonu*). Kontrola po překladu upozorní, když termín v překladu chybí, a oprava ho doplní.
+On the **Glosář** (Glossary) tab you set binding translations of technical terms (e.g. *performance review → hodnocení výkonu*). After translation the check warns when a term is missing and the fix step adds it.
 
-## Časté potíže
+## Troubleshooting
 
-- **„LM Studio není spuštěné a jeho příkaz „lms“ se nenašel“:** LM Studio není nainstalované, nebo ještě nebylo ani jednou spuštěné. Spusť ho a zkus to znovu.
-- **„Model … se nepodařilo načíst“:** model není stažený, nebo se nevejde do paměti. Zkontroluj v LM Studiu, že je stažený, a zavři náročné aplikace.
-- **Překlad je pomalý nebo se postupně zpomaluje:** u notebooků bez aktivního chlazení výkon při delší zátěži klesá. Pomůže připojit napájení a překládat po menších částech.
-- **„Překlad se na stránce N nevešel do původního místa“:** český text bývá delší. V přeloženém PDF je písmo menší nebo text přesahuje, plný text je ve Wordu.
-- **Odrážky z webových PDF jsou slité do jedné věty:** známé omezení. Pomůže Vyvážený režim s OCR.
+- **"LM Studio není spuštěné a jeho příkaz „lms“ se nenašel"** (LM Studio is not running and its `lms` command was not found): LM Studio is not installed or has never been started. Start it and try again.
+- **"Model … se nepodařilo načíst"** (Model … could not be loaded): the model is not downloaded or doesn't fit in memory. Check in LM Studio that it is downloaded, close heavy apps, or lower GPU Offload (see [Hardware requirements](#hardware-requirements)).
+- **Translation is slow or slows down over time:** laptops without active cooling throttle under long load. Plug in the charger and translate in smaller parts.
+- **"Překlad se na stránce N nevešel do původního místa"** (The translation did not fit on page N): Czech text tends to be longer. The translated PDF uses a smaller font there or the text overflows; the full text is in the Word file.
+- **Bullet points from web PDFs merge into one sentence:** a known limitation. Balanced mode with OCR helps.
 
-## Vývoj
+## Development
 
 ```bash
 npm install
-npm start          # build a spuštění z projektu
-npm test           # testy (bez LLM)
-npm run build      # jen build
+npm start          # build and run from the project
+npm test           # tests (no LLM needed)
+npm run build      # build only
 ```
 
-Release vznikne pushnutím tagu se stejnou verzí jako v `package.json` (např. `v0.1.1`). GitHub Actions sestaví instalátory pro macOS a Windows a vydá je.
+A release is created by pushing a tag matching the version in `package.json` (e.g. `v0.1.1`). GitHub Actions builds the macOS and Windows installers and publishes them.
