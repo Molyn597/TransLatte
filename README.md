@@ -92,7 +92,7 @@ On the **Glossary** tab you set binding translations of technical terms (e.g. *p
 
 ## Troubleshooting
 
-- **“LM Studio is not running and its ‘lms’ command was not found”**: LM Studio is not installed or has never been started. Start it and try again.
+- **“LM Studio is not running and its “lms” command was not found”**: LM Studio is not installed or has never been started. Start it and try again.
 - **“Could not load the model …”**: the model is not downloaded or doesn't fit in memory. Check in LM Studio that it is downloaded, close heavy apps, or lower GPU Offload (see [Hardware requirements](#hardware-requirements)).
 - **Translation is slow or slows down over time:** laptops without active cooling throttle under long load. Plug in the charger and translate in smaller parts.
 - **“The translation did not fit into the original space on page N”**: Czech text tends to be longer. The translated PDF uses a smaller font there or the text overflows; the full text is in the Word file.
