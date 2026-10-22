@@ -5,9 +5,26 @@ Lokální překladač PDF a dokumentů. Překládá na tvém počítači přes m
 ## Co potřebuješ
 
 - **macOS** (Apple Silicon i Intel) nebo **Windows 10/11** (x64 i ARM).
-- **Aspoň 16 GB RAM.** V paměti je vždy jen jeden model a 12B model zabere kolem 8 GB.
+- **Mac s 16 GB+ paměti, nebo PC s grafikou s 8 GB+ VRAM a 16 GB+ RAM.** Podrobnosti v části [Požadavky na hardware](#požadavky-na-hardware).
 - **Zhruba 20 GB volného místa** na modely.
 - **LM Studio** se staženými modely (viz níže).
+
+## Požadavky na hardware
+
+Modely běží na grafice. V paměti je vždy jen jeden, aplikace je střídá podle fáze překladu. Každý 12B model potřebuje zhruba 9–11 GB: soubor modelu (7–8 GB) plus místo pro kontext, protože aplikace pracuje s kontextem 16 tisíc tokenů a posílá až 4 požadavky najednou.
+
+| Počítač | Jak poběží |
+| --- | --- |
+| Mac s Apple Silicon a 24 GB+, PC s 16 GB+ VRAM | Doporučeno, model se vejde celý i s rezervou. |
+| Mac s 16 GB, PC s 12 GB VRAM a 16 GB RAM | Funguje. Během překladu nepoužívej další náročné aplikace. |
+| PC s 8 GB VRAM a 16–32 GB RAM | Funguje pomaleji, část modelu běží z RAM. |
+| PC bez samostatné grafiky, Mac s 8 GB | Nevhodné. Jen na procesoru trvá několikastránkový dokument desítky minut. |
+
+- **Mac:** grafika sdílí paměť se systémem a macOS jí nechá zhruba dvě třetiny až tři čtvrtiny. Proto je 16 GB minimum. Intel Macy s grafikou AMD nejsou vyzkoušené.
+- **Windows:** LM Studio rozdělí model mezi grafiku a RAM samo. Když se model nenačte nebo systém začne být nepoužitelný, otevři v LM Studiu nastavení modelu (**My Models** → ozubené kolečko u modelu) a sniž **GPU Offload**. Méně vrstev na grafice znamená menší nároky na VRAM, ale pomalejší překlad.
+- **Slabší a silnější počítače:** TranslateGemma existuje i ve velikosti 4B (pro 6–8 GB VRAM, horší kvalita) a 27B (pro 24 GB VRAM, lepší kvalita). Po stažení ji vyber v **Nastavení → Překlad**. Tyto velikosti zatím nejsou s TransLatte vyzkoušené.
+
+Uvedené nároky jsou odhad. Ověřené jsou na MacBooku Air M-series s 16 GB.
 
 ## Instalace
 
@@ -16,11 +33,11 @@ Lokální překladač PDF a dokumentů. Překládá na tvém počítači přes m
 1. Stáhni a nainstaluj LM Studio z <https://lmstudio.ai> a jednou ho spusť.
 2. V LM Studiu otevři vyhledávání modelů (lupa vlevo) a stáhni tyto modely:
 
-   | K čemu | Model | Velikost |
-   | --- | --- | --- |
-   | Překlad | `translategemma-12b-it` | 7,8 GB |
-   | Opravy, kontext dokumentu a tabulky | `google/gemma-4-12b-qat` | 7,2 GB |
-   | Čtení stránek (OCR) | `unlimited-ocr` | 3,9 GB |
+   | K čemu | Model (hledej v LM Studiu) | Varianta | Velikost |
+   | --- | --- | --- | --- |
+   | Překlad | `mradermacher/translategemma-12b-it-GGUF` | Q4_K_S | 7,8 GB |
+   | Opravy, kontext dokumentu a tabulky | `google/gemma-4-12b-qat` | Q4_0 | 7,2 GB |
+   | Čtení stránek (OCR) | `sahilchachra/Unlimited-OCR-GGUF` | Q8_0 | 3,9 GB |
 
    Pro Rychlý režim u digitálních PDF stačí první dva. OCR model je potřeba pro skeny a pro Vyvážený a Kvalitní režim.
 3. Modely nemusíš ručně načítat ani zapínat server. TransLatte si server spustí a modely načte samo, vždy jen ten, který právě potřebuje.
