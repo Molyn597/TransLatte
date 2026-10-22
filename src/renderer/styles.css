@@ -838,6 +838,7 @@ input:focus {
 }
 
 .tab {
+  white-space: nowrap;
   padding: 7px 16px;
   border: 0;
   border-radius: 999px;
@@ -938,6 +939,22 @@ input:focus {
   flex-direction: column;
   align-items: center;
   gap: 14px;
+}
+
+.pdf-pairs {
+  align-items: stretch;
+}
+
+.pdf-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.pdf-pairs.stacked .pdf-pair {
+  grid-template-columns: 1fr;
+  justify-items: center;
 }
 
 .pdf-pages canvas {

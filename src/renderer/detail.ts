@@ -1,4 +1,4 @@
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
 import { languageName } from '../shared/languages';
 import { PDFJS_OPTIONS } from '../shared/pdf';
 import type { DocumentContext, Job, JobDetail, Mode, Segment, Stage } from '../shared/types';
@@ -20,7 +20,7 @@ import {
 
 GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs';
 
-type Tab = 'compare' | 'translated-pdf' | 'translation' | 'original' | 'info';
+type Tab = 'compare' | 'translated-pdf' | 'side-by-side' | 'translation' | 'original' | 'info';
 
 const $ = (id: string) => document.getElementById(id)!;
 const finalText = (s: Segment) => s.edited ?? s.polished ?? s.translation ?? '';
@@ -35,7 +35,10 @@ let tab: Tab = 'compare';
 let renderToken = 0;
 
 export const detailJobId = () => current?.job.id ?? null;
-const pdfTab = () => document.querySelector<HTMLButtonElement>('#detail-tabs .tab[data-tab="translated-pdf"]')!;
+const pdfTabs = () => document.querySelectorAll<HTMLButtonElement>('#detail-tabs .tab[data-pdf]');
+// Pod touto šířkou těla se stránky řadí pod sebe.
+const SIDE_BY_SIDE_MIN = 760;
+const PAIR_GAP = 14;
 
 function meta(job: Job) {
   const chips = [
@@ -175,6 +178,18 @@ async function originalView(detail: JobDetail, token: number) {
   return pdfView(await window.api.readInput(detail.job.id), token);
 }
 
+async function pdfCanvas(pdf: PDFDocumentProxy, number: number, width: number) {
+  const page = await pdf.getPage(number);
+  const base = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: (width / base.width) * window.devicePixelRatio });
+  const canvas = h('canvas');
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  canvas.style.width = `${width}px`;
+  await page.render({ canvas, viewport }).promise;
+  return canvas;
+}
+
 async function pdfView(data: Uint8Array | null, token: number) {
   const holder = h('div', { class: 'pdf-pages' }, h('p', { class: 'muted' }, 'Načítám PDF…'));
   if (!data || token !== renderToken) return holder;
@@ -183,15 +198,27 @@ async function pdfView(data: Uint8Array | null, token: number) {
   const width = Math.min(900, $('detail-body').clientWidth || 800);
   for (let p = 1; p <= pdf.numPages; p++) {
     if (token !== renderToken) break;
-    const page = await pdf.getPage(p);
-    const base = page.getViewport({ scale: 1 });
-    const viewport = page.getViewport({ scale: (width / base.width) * window.devicePixelRatio });
-    const canvas = h('canvas');
-    canvas.width = Math.ceil(viewport.width);
-    canvas.height = Math.ceil(viewport.height);
-    canvas.style.width = `${width}px`;
-    holder.append(canvas);
-    await page.render({ canvas, viewport }).promise;
+    holder.append(await pdfCanvas(pdf, p, width));
+  }
+  return holder;
+}
+
+/** Stránka originálu a téže stránky překladu vedle sebe; v úzkém okně pod sebou. */
+async function sideBySideView(detail: JobDetail, token: number) {
+  const holder = h('div', { class: 'pdf-pages pdf-pairs' });
+  const [source, output] = await Promise.all([window.api.readInput(detail.job.id), window.api.readOutputPdf(detail.job.id)]);
+  if (!source || !output || token !== renderToken) return holder;
+  const [left, right] = await Promise.all([getDocument({ data: source, ...PDFJS_OPTIONS }).promise, getDocument({ data: output, ...PDFJS_OPTIONS }).promise]);
+  const available = $('detail-body').clientWidth || 800;
+  const stacked = available < SIDE_BY_SIDE_MIN;
+  const width = stacked ? Math.min(900, available) : Math.floor((available - PAIR_GAP) / 2);
+  holder.classList.toggle('stacked', stacked);
+  for (let p = 1; p <= Math.max(left.numPages, right.numPages); p++) {
+    if (token !== renderToken) break;
+    const pair = h('div', { class: 'pdf-pair' });
+    holder.append(pair);
+    const cells = await Promise.all([p <= left.numPages ? pdfCanvas(left, p, width) : null, p <= right.numPages ? pdfCanvas(right, p, width) : null]);
+    for (const canvas of cells) pair.append(canvas ?? h('div'));
   }
   return holder;
 }
@@ -239,13 +266,18 @@ async function renderBody() {
   }
   const { job, segments } = current;
   if (tab === 'info') return body.replaceChildren(infoView(current));
-  if (tab === 'original' || tab === 'translated-pdf') {
+  if (tab === 'original' || tab === 'translated-pdf' || tab === 'side-by-side') {
     body.replaceChildren(h('p', { class: 'muted' }, 'Načítám…'));
     try {
-      const view = tab === 'original' ? await originalView(current, token) : await pdfView(await window.api.readOutputPdf(job.id), token);
+      const view =
+        tab === 'original'
+          ? await originalView(current, token)
+          : tab === 'side-by-side'
+            ? await sideBySideView(current, token)
+            : await pdfView(await window.api.readOutputPdf(job.id), token);
       if (token === renderToken) body.replaceChildren(view);
     } catch (e) {
-      const what = tab === 'original' ? 'Originál' : 'Přeložené PDF';
+      const what = tab === 'original' ? 'Originál' : tab === 'side-by-side' ? 'PDF vedle sebe' : 'Přeložené PDF';
       if (token === renderToken) body.replaceChildren(h('div', { class: 'error-box' }, `${what} nejde zobrazit: ${(e as Error).message}`));
     }
     return;
@@ -264,8 +296,8 @@ function renderHeader() {
   $('detail-name').textContent = job.name;
   $('detail-meta').replaceChildren(...meta(job));
   $('detail-actions').replaceChildren(...actions(job));
-  pdfTab().hidden = !job.outputPdf;
-  if (tab === 'translated-pdf' && !job.outputPdf) tab = 'compare';
+  for (const b of pdfTabs()) b.hidden = !job.outputPdf;
+  if ((tab === 'translated-pdf' || tab === 'side-by-side') && !job.outputPdf) tab = 'compare';
   renderProgress(job);
 }
 

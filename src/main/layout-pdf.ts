@@ -32,6 +32,12 @@ const TABLE_MIN_SCALE = 0.5;
 const STEP = 0.05;
 // Plocha přes původní text je o kousek větší, aby nezůstaly okraje písmen.
 const PAD = 1.5;
+// Řádek pixelů se počítá jako obsazený od tohoto počtu odlišných pixelů (šum obrázků).
+const INK_PIXELS = 2;
+// Prázdné místo musí mít barvu pozadí skoro přesně, aby se text nedostal přes okraj jemně odlišné plochy.
+const BLANK_TOLERANCE = 8;
+// Nejvýš tolik bodů pod odstavcem smí překlad využít, než se začne zmenšovat písmo.
+const MAX_ROOM = 40;
 const FONT_FILES = {
   sans: 'NotoSans-Regular.ttf',
   sansBold: 'NotoSans-Bold.ttf',
@@ -283,6 +289,41 @@ export function inkDifference(a: PageImage, b: PageImage, box: Box): number {
   return total ? different / total : 0;
 }
 
+/** Řádek pixelů, na kterém ve dvou vykresleních poprvé vzniká text (jinak null). */
+function firstInkRow(a: PageImage, b: PageImage, box: Box): number | null {
+  const x0 = Math.max(0, Math.floor(box.x));
+  const x1 = Math.min(a.width, b.width, Math.ceil(box.x + box.w));
+  const y1 = Math.min(a.height, b.height, Math.ceil(box.y + box.h));
+  for (let y = Math.max(0, Math.floor(box.y)); y < y1; y++) {
+    let different = 0;
+    for (let x = x0; x < x1; x++) {
+      const i = (y * a.width + x) * 4;
+      const j = (y * b.width + x) * 4;
+      if (Math.abs(a.data[i] - b.data[j]) + Math.abs(a.data[i + 1] - b.data[j + 1]) + Math.abs(a.data[i + 2] - b.data[j + 2]) > 60 && ++different >= INK_PIXELS) return y;
+    }
+  }
+  return null;
+}
+
+/** Výška (v bodech) prázdného pásu pod obdélníkem: řádky pixelů stejné barvy jako pozadí, nejvýš MAX_ROOM. */
+export function blankBelow(image: PageImage, rect: Box, color: Color, px: number): number {
+  const x0 = Math.max(0, Math.floor(rect.x * px));
+  const x1 = Math.min(image.width, Math.ceil((rect.x + rect.w) * px));
+  const start = Math.ceil((rect.y + rect.h + PAD) * px);
+  const end = Math.min(image.height, start + Math.ceil(MAX_ROOM * px));
+  const [r, g, b] = color.map((v) => v * 255);
+  let y = start;
+  for (; y < end; y++) {
+    let different = 0;
+    for (let x = x0; x < x1; x++) {
+      const i = (y * image.width + x) * 4;
+      if (Math.abs(image.data[i] - r) + Math.abs(image.data[i + 1] - g) + Math.abs(image.data[i + 2] - b) > BLANK_TOLERANCE && ++different >= INK_PIXELS) break;
+    }
+    if (different >= INK_PIXELS) break;
+  }
+  return Math.max(0, (y - start) / px);
+}
+
 // Písmo Noto nemá všechny symboly; řídicí znaky a tabulátory by pdf-lib vypsal jako prázdné glyfy.
 const clean = (text: string) => text.replace(/\t/g, ' ').replace(/[\u0000-\u0009\u000b-\u001f\u007f­​-‏﻿]/g, '');
 
@@ -320,6 +361,8 @@ interface Placement {
   ruled: boolean;
   /** Pravý okraj sloupce, kam smí jednořádkový text přesáhnout. */
   right: number;
+  /** Prázdné místo (body) pod obdélníkem, které smí odstavec využít, než zmenší písmo. */
+  room: number;
   text: string;
 }
 
@@ -335,8 +378,21 @@ export function visiblePart(rect: Rect, geometry: PageGeometry, full: PageImage,
   const shown = boxes.filter(([x, y, w, h]) => inkDifference(full, bare, { x: x * px, y: y * px, w: w * px, h: h * px }) >= VISIBLE_INK);
   if (!shown.length) return null;
   if (shown.length === boxes.length) return rect;
-  const top = Math.min(...shown.map(([, y]) => y));
+  let top = Math.min(...shown.map(([, y]) => y));
   const bottom = Math.max(...shown.map(([, y, , h]) => y + h));
+  // Řádky nad prvním viditelným jsou pod lištou webu: text i plocha začnou až u prvních pixelů písma pod ní,
+  // aby překlad nepřekryl okraj lišty.
+  const hiddenAbove = boxes.some(([, y]) => y < top);
+  const first = hiddenAbove ? shown.find(([, y]) => y === top) : undefined;
+  if (first) {
+    const ink = firstInkRow(full, bare, { x: first[0] * px, y: first[1] * px, w: first[2] * px, h: first[3] * px });
+    const start = ink === null ? top : ink / px;
+    if (start - top > PAD) {
+      top = start + PAD;
+      const clipped: [number, number, number, number] = [first[0], top, first[2], Math.max(0, first[1] + first[3] - top)];
+      return { ...rect, y: top, h: bottom - top, cover: shown.map((box) => (box === first ? clipped : box)) };
+    }
+  }
   return { ...rect, y: top, h: bottom - top, cover: shown };
 }
 
@@ -362,7 +418,7 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     .filter((i) => i.rects.length && i.text);
 
   // Viditelnost a barva pozadí stránku po stránce (vykreslení se hned zahodí).
-  const shown = new Map<Rect, { rect: Rect; color: Color; ruled: boolean }>();
+  const shown = new Map<Rect, { rect: Rect; color: Color; ruled: boolean; room: number }>();
   for (const number of [...new Set(items.flatMap((i) => i.rects.map((r) => r.page)))].sort((a, b) => a - b)) {
     const geometry = pages.get(number)!;
     const full = await options.pageImage(number, false);
@@ -373,7 +429,14 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
       if (!visible) continue;
       const box = { x: (visible.x - PAD) * px, y: (visible.y - PAD) * px, w: (visible.w + PAD * 2) * px, h: (visible.h + PAD * 2) * px };
       const table = items.some((i) => i.segment.kind === 'table' && i.rects.includes(rect));
-      shown.set(rect, { rect: visible, color: backgroundColor(full, box), ruled: table && !rect.cover && hasRuledEdges(full, { x: rect.x * px, y: rect.y * px, w: rect.w * px, h: rect.h * px }) });
+      const color = backgroundColor(full, box);
+      const flowing = items.some((i) => ['paragraph', 'list'].includes(i.segment.kind) && i.rects.includes(rect));
+      shown.set(rect, {
+        rect: visible,
+        color,
+        ruled: table && !rect.cover && hasRuledEdges(full, { x: rect.x * px, y: rect.y * px, w: rect.w * px, h: rect.h * px }),
+        room: flowing ? blankBelow(full, visible, color, px) : 0,
+      });
     }
   }
 
@@ -383,9 +446,9 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     if (!visible.length) continue;
     const parts = segment.kind === 'table' ? [text, ...visible.slice(1).map(() => '')] : splitText(text, visible.map((r) => r.chars ?? r.w * r.h));
     visible.forEach((original, i) => {
-      const { rect, color, ruled } = shown.get(original)!;
+      const { rect, color, ruled, room } = shown.get(original)!;
       if (!byPage.has(rect.page)) byPage.set(rect.page, []);
-      byPage.get(rect.page)!.push({ segment, rect, color, ruled, right: rect.x + rect.w, text: parts[i] });
+      byPage.get(rect.page)!.push({ segment, rect, color, ruled, right: rect.x + rect.w, room, text: parts[i] });
     });
   }
 
@@ -406,7 +469,7 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     }
     // Odhad velikosti písma z OCR kolísá blok od bloku; odstavce na stránce se drží kolem mediánu.
     const bodySize = median(placements.filter((p) => p.segment.kind === 'paragraph' && p.segment.fontSize).map((p) => p.segment.fontSize!));
-    for (const { segment, rect, color: background, ruled, right, text } of placements) {
+    for (const { segment, rect, color: background, ruled, right, room, text } of placements) {
       if (!text) continue;
       const color = luminance(background) < 0.5 ? rgb(1, 1, 1) : rgb(0, 0, 0);
       const regular = await font(segment.serif ? 'serif' : 'sans');
@@ -466,7 +529,9 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
       } else {
         // Jednořádkový nadpis smí do volného místa ve sloupci, než by se zmenšoval.
         const single = rect.h < size * 2.2 && !segment.centered;
-        const fitted = fitText(text, rect, size, (t, s) => main.widthOfTextAtSize(t, s), single ? right - rect.x : undefined);
+        // Volné místo pod odstavcem se využije dřív, než se písmo zmenší; mezera k dalšímu bloku zůstane.
+        const extra = Math.max(0, room - size * 0.8);
+        const fitted = fitText(text, { w: rect.w, h: rect.h + extra }, size, (t, s) => main.widthOfTextAtSize(t, s), single ? right - rect.x : undefined);
         fits = fitted.fits;
         fitted.lines.forEach((line, l) => {
           const indent = segment.centered ? Math.max(0, (rect.w - main.widthOfTextAtSize(line, fitted.size)) / 2) : 0;

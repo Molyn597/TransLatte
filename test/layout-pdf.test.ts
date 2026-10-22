@@ -5,6 +5,7 @@ import { degrees, PDFDocument } from 'pdf-lib';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   backgroundColor,
+  blankBelow,
   buildLayoutPdf,
   fitTable,
   fitText,
@@ -131,6 +132,54 @@ describe('viditelnost textu', () => {
     const ocr = { page: 1, x: 50, y: 10, w: 300, h: 40 };
     expect(visiblePart(ocr, geometry, half, white)).toBe(ocr);
     expect(visiblePart({ ...rect, y: 10, cover: [[50, 10, 300, 12]] }, { ...geometry, invisible: true }, half, white)).not.toBeNull();
+  });
+});
+
+describe('text pod lištou webu', () => {
+  const geometry: PageGeometry = { view: [0, 0, 600, 800], rotate: 0, width: 600, height: 800 };
+  const white = { width: 600, height: 800, data: new Uint8Array(600 * 800 * 4).fill(255) };
+  // Písmo začíná až na řádku 206: nahoře v rámečku řádku (200–212) leží lišta, která text schovává.
+  const clipped = { ...white, data: white.data.map((v, i) => (i >= 600 * 4 * 206 && Math.floor(i / 4) % 3 === 0 && i % 4 < 3 ? 0 : v)) };
+
+  it('první viditelný řádek začne až pod lištou, plocha nezasahuje nad písmo', () => {
+    const rect = { page: 1, x: 50, y: 180, w: 300, h: 46, cover: [[50, 180, 300, 12], [50, 200, 300, 12], [50, 214, 300, 12]] as [number, number, number, number][] };
+    const part = visiblePart(rect, geometry, clipped, white)!;
+    expect(part.y).toBeCloseTo(207.5, 5);
+    expect(part.cover![0][1]).toBeCloseTo(207.5, 5);
+    expect(part.y + part.h).toBe(226);
+    // Plocha překryje i s okrajem PAD jen od prvních pixelů písma, tedy ne nad řádek 206.
+    expect(part.cover![0][1] - 1.5).toBeGreaterThanOrEqual(206);
+  });
+
+  it('bez schovaných řádků nad ním nic neposouvá', () => {
+    const rect = { page: 1, x: 50, y: 200, w: 300, h: 26, cover: [[50, 200, 300, 12], [50, 214, 300, 12]] as [number, number, number, number][] };
+    expect(visiblePart(rect, geometry, clipped, white)).toBe(rect);
+  });
+});
+
+describe('volné místo pod odstavcem', () => {
+  const white = { width: 600, height: 800, data: new Uint8Array(600 * 800 * 4).fill(255) };
+  const black = (image: typeof white, x: number, y: number) => image.data.set([0, 0, 0, 255], (y * image.width + x) * 4);
+
+  it('změří prázdný pás až k dalšímu obsahu', () => {
+    const image = { ...white, data: white.data.slice() };
+    for (let x = 60; x < 80; x++) black(image, x, 275);
+    expect(blankBelow(image, { x: 50, y: 200, w: 300, h: 50 }, [1, 1, 1], 1)).toBe(23);
+  });
+
+  it('pás je nejvýš 40 bodů a okraj jemně odlišné plochy ho ukončí', () => {
+    expect(blankBelow(white, { x: 50, y: 100, w: 300, h: 20 }, [1, 1, 1], 1)).toBe(40);
+    const grey = { ...white, data: white.data.slice() };
+    for (let x = 0; x < 600; x++) grey.data.set([250, 250, 250, 255], (130 * 600 + x) * 4);
+    expect(blankBelow(grey, { x: 50, y: 100, w: 300, h: 20 }, [1, 1, 1], 1)).toBeLessThan(10);
+  });
+
+  it('využije volné místo, než zmenší písmo', () => {
+    const text = 'slovo '.repeat(60);
+    const small = fitText(text, { w: 200, h: 60 }, 12, measure);
+    const roomy = fitText(text, { w: 200, h: 60 + 40 }, 12, measure);
+    expect(small.size).toBeLessThan(12);
+    expect(roomy.size).toBeGreaterThan(small.size);
   });
 });
 
