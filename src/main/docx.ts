@@ -1,6 +1,6 @@
 import { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from 'docx';
 import type { Segment } from '../shared/types';
-import { finalText } from './segments';
+import { finalText, visibleSegments } from './segments';
 
 const LIST_MARK = /^\s*([-*•–]|\d+[.)])\s+/;
 
@@ -32,7 +32,7 @@ function tableFrom(text: string) {
 
 export async function buildDocx(title: string, segments: Segment[]): Promise<Buffer> {
   const children: (Paragraph | Table)[] = [];
-  for (const s of segments) {
+  for (const s of visibleSegments(segments)) {
     const text = finalText(s);
     if (s.kind === 'heading') {
       children.push(new Paragraph({ text, heading: children.length ? HeadingLevel.HEADING_2 : HeadingLevel.TITLE }));

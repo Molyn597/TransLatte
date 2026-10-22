@@ -46,6 +46,6 @@ async function request<T>(task: PdfTask): Promise<T> {
 
 export const openPdf = (docId: string, data: Uint8Array) => request<PdfOpenResult>({ op: 'open', docId, data });
 export const pageText = (docId: string, page: number) => request<PdfTextResult>({ op: 'text', docId, page });
-export const renderPage = (docId: string, page: number, scale: number, crop?: [number, number, number, number]) =>
-  request<PdfRenderResult>({ op: 'render', docId, page, scale, crop });
+export const renderPage = (docId: string, page: number, scale: number, crop?: [number, number, number, number], noText = false) =>
+  request<PdfRenderResult>({ op: 'render', docId, page, scale, crop, noText });
 export const closePdf = (docId: string) => request<null>({ op: 'close', docId }).catch(() => null);

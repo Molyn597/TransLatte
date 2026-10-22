@@ -7,13 +7,15 @@ export interface TextItem {
   y: number;
   w: number;
   h: number;
+  serif?: boolean;
+  bold?: boolean;
 }
 
 export type PdfTask =
   | { op: 'open'; docId: string; data: Uint8Array }
   | { op: 'text'; docId: string; page: number }
   /** crop: výřez [x0, y0, x1, y1] jako podíl šířky/výšky stránky (0–1). */
-  | { op: 'render'; docId: string; page: number; scale: number; crop?: [number, number, number, number] }
+  | { op: 'render'; docId: string; page: number; scale: number; crop?: [number, number, number, number]; noText?: boolean }
   | { op: 'close'; docId: string };
 
 export interface PdfOpenResult {
@@ -24,6 +26,11 @@ export interface PdfTextResult {
   items: TextItem[];
   width: number;
   height: number;
+  /** pdf.js `view` (výřez cropBox v uživatelských souřadnicích PDF) a otočení stránky. */
+  view: [number, number, number, number];
+  rotate: number;
+  /** Text stránky je neviditelný (textová vrstva OCR nad skenem). */
+  invisible: boolean;
 }
 
 /** PNG jako data URL, rovnou použitelné pro vision model. */

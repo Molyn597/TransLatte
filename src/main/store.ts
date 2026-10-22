@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notify: true,
   unloadWhenIdle: true,
   theme: 'system',
+  layoutPdf: true,
   rates: { ocrPerPage: 7, translatePerKChar: 25, fixPerSegment: 8 },
 };
 

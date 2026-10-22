@@ -82,6 +82,7 @@ export class Queue {
       error: undefined,
       progress: undefined,
       output: undefined,
+      outputPdf: undefined,
       warnings: 0,
       context: undefined,
       notes: undefined,

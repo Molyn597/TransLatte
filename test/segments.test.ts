@@ -5,7 +5,7 @@ import {
   groupSegments,
   layoutToBlocks,
   markdownToBlocks,
-  dropDuplicateBlocks,
+  markDuplicateBlocks,
   dropRepeatedBlocks,
   mergeAcrossPages,
   mergeBrokenHeadings,
@@ -16,6 +16,7 @@ import {
   sentenceChunks,
   splitBatch,
   stripAddedPeriod,
+  textLayerGeometry,
 } from '../src/main/segments';
 
 describe('parseOcr', () => {
@@ -256,13 +257,100 @@ describe('zvýrazněné citáty', () => {
     expect(merged.map((b) => b.text)).toEqual([quote, 'Results']);
   });
 
-  it('citát, který opakuje větu z článku, zahodí; odstavec nechá', () => {
-    const blocks = dropDuplicateBlocks([
+  it('citát, který opakuje větu z článku, ponechá jen pro přeložené PDF; odstavec zůstane viditelný', () => {
+    const blocks = markDuplicateBlocks([
       { kind: 'heading', text: quote },
       { kind: 'paragraph', text: `We found that ${quote.toLowerCase()} -- and managers agree.` },
       { kind: 'heading', text: 'Results' },
       { kind: 'paragraph', text: 'Results were clear.' },
     ]);
-    expect(blocks.map((b) => b.kind + ':' + b.text.slice(0, 13))).toEqual(['paragraph:We found that', 'heading:Results', 'paragraph:Results were ']);
+    expect(blocks.map((b) => `${b.layoutOnly ? 'pdf' : 'vidět'}:${b.text.slice(0, 13)}`)).toEqual([
+      'pdf:Good teams ne',
+      'vidět:We found that',
+      'vidět:Results',
+      'vidět:Results were ',
+    ]);
+  });
+
+  it('citát jen pro PDF se neexportuje do Markdownu', () => {
+    const segments = blocksToSegments([
+      { kind: 'heading', text: quote, layoutOnly: true },
+      { kind: 'paragraph', text: 'Body' },
+    ]);
+    expect(segments[0].layoutOnly).toBe(true);
+    segments[0].translation = 'Citát';
+    segments[1].translation = 'Text';
+    expect(segmentsToMarkdown(segments)).toBe('Text');
+  });
+});
+
+describe('geometrie bloků pro přeložené PDF', () => {
+  it('blok z textové vrstvy nese obálku řádků, písmo a typ', () => {
+    const items: TextItem[] = [
+      { ...item('Results', 50, 80, 60, 16), bold: true },
+      { ...item('First body line that is long', 52, 100, 300), serif: true },
+      { ...item('second line.', 50, 112, 80), serif: true },
+    ];
+    const [heading, body] = layoutToBlocks(items, 600, 3);
+    expect(heading).toMatchObject({ kind: 'heading', bold: true, fontSize: 16, rects: [{ page: 3, x: 50, y: 80, w: 60, h: 19.2 }] });
+    // Spodní okraj = horní okraj posledního řádku + 1,2 × výška (dotažnice).
+    expect(body).toMatchObject({ serif: true, bold: false, fontSize: 10, rects: [{ page: 3, x: 50, y: 100, w: 302, h: 24 }] });
+    expect(body.rects![0].chars).toBe(body.text.length);
+  });
+
+  it('řádek tabulky má plochy k překrytí po sloupcích, název na střed se pozná', () => {
+    const blocks = layoutToBlocks(
+      [
+        item('Centered title', 250, 40, 100, 16),
+        item('Group', 50, 100, 40),
+        item('Score', 200, 100, 40),
+        item('Short', 50, 112, 40),
+        item('84', 200, 112, 10),
+      ],
+      600,
+      1,
+    );
+    expect(blocks[0]).toMatchObject({ kind: 'heading', centered: true });
+    expect(blocks[1].centered).toBeUndefined();
+    expect(blocks[1].rects![0].cover).toEqual([
+      [50, 100, 40, 12],
+      [200, 100, 40, 12],
+      [50, 112, 40, 12],
+      [200, 112, 10, 12],
+    ]);
+  });
+
+  it('box z OCR přepočítá na body stránky u všech bloků', () => {
+    const blocks = parseOcr('title [0, 0, 999, 99]Heading\ntext [99, 199, 599, 399]Some paragraph text here.', 1, { width: 600, height: 800 });
+    expect(blocks[0].rects).toEqual([{ page: 1, x: 0, y: 0, w: 600, h: 79.3, chars: 7 }]);
+    expect(blocks[1].rects![0]).toMatchObject({ x: 59.5, y: 159.4, w: 300.3, h: 160.2 });
+    expect(blocks[1].fontSize).toBeGreaterThan(5);
+    expect(blocks[0].bold).toBe(true);
+  });
+
+  it('blok z OCR na digitální stránce převezme písmo a řádky z textové vrstvy', () => {
+    const [table] = parseOcr('table [83, 124, 499, 249]<table><tr><td>Group</td><td>Score</td></tr></table>', 1, { width: 600, height: 800 });
+    expect(table.fontSize).toBeGreaterThan(9);
+    textLayerGeometry(
+      [table],
+      [{ ...item('Group', 55, 104, 40, 9), serif: true }, { ...item('Score', 200, 104, 40, 9), serif: true }, item('Elsewhere', 400, 600)],
+      600,
+    );
+    expect(table).toMatchObject({ fontSize: 9, serif: true, rects: [{ x: 55, y: 104, w: 185, cover: [[55, 104, 40, 10.8], [200, 104, 40, 10.8]] }] });
+  });
+
+  it('odstavec přes konec stránky má obdélníky na obou stránkách', () => {
+    const rect = (page: number) => ({ page, x: 50, y: 700, w: 300, h: 40, chars: 90 });
+    const [merged] = mergeAcrossPages([
+      { kind: 'paragraph', text: 'As this journey continues, we keep focusing on our key learnings to continue to enrich the', page: 1, rects: [rect(1)] },
+      { kind: 'paragraph', text: 'Check-in approach.', page: 2, rects: [rect(2)] },
+    ]);
+    expect(merged.rects!.map((r) => r.page)).toEqual([1, 2]);
+    const [heading] = mergeBrokenHeadings([
+      { kind: 'heading', text: 'Good teams need honest', page: 2, rects: [rect(2)] },
+      { kind: 'heading', text: 'conversations', page: 2, rects: [rect(2)] },
+    ]);
+    expect(heading.rects).toHaveLength(2);
+    expect(blocksToSegments([merged])[0].rects).toHaveLength(2);
   });
 });

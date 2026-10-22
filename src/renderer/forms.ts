@@ -148,6 +148,10 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
         settings.notify = v;
         void save();
       }),
+      toggle('Vytvářet PDF se zachovaným vzhledem', 'U PDF dokumentů vznikne i přeložené PDF, které vypadá jako originál.', settings.layoutPdf, (v) => {
+        settings.layoutPdf = v;
+        void save();
+      }),
       toggle('Uvolnit modely po dokončení', 'Po poslední úloze se modely vyhodí z paměti a uvolní RAM.', settings.unloadWhenIdle, (v) => {
         settings.unloadWhenIdle = v;
         void save();

@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { nativeImage } from 'electron';
 import mammoth from 'mammoth';
 import { detect } from 'tinyld';
 import { isSupported } from '../shared/languages';
@@ -7,6 +8,7 @@ import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, Segment, Set
 import { selectPages } from '../shared/pages';
 import { documentOrder, rewriteDates, type DateOrder } from './dates';
 import { buildDocx } from './docx';
+import { buildLayoutPdf, type PageGeometry, type PageImage } from './layout-pdf';
 import { chat, complete, ensureModel, ensureServer, isVisionModel } from './lmstudio';
 import { closePdf, openPdf, pageText, renderPage } from './pdf';
 import {
@@ -34,11 +36,11 @@ import { ensureDictionary } from './spell';
 import { SpellWorker, spellWorkerPath } from './spell-client';
 import {
   blocksToSegments,
-  dropDuplicateBlocks,
   dropRepeatedBlocks,
   finalText,
   groupSegments,
   layoutToBlocks,
+  markDuplicateBlocks,
   markdownToBlocks,
   mergeAcrossPages,
   mergeBrokenHeadings,
@@ -49,6 +51,7 @@ import {
   sentenceChunks,
   splitBatch,
   stripAddedPeriod,
+  textLayerGeometry,
   type Block,
 } from './segments';
 import type { Store } from './store';
@@ -66,6 +69,9 @@ const FIX_SHARE = 0.15;
 const SPELL_BATCH = 40;
 
 export const outputName = (job: Job) => `${job.name} (${job.targetLang.toUpperCase()}).docx`;
+export const outputPdfName = (job: Job) => `${job.name} (${job.targetLang.toUpperCase()}).pdf`;
+// Pro barvu pozadí a viditelnost textu stačí bod na pixel.
+const BACKGROUND_SCALE = 1;
 
 export interface JobContext {
   job: Job;
@@ -76,6 +82,8 @@ export interface JobContext {
   progress: (p: Progress) => void;
   /** Počet stránek, které prošly OCR (pro zpřesnění odhadu). */
   ocrCount?: number;
+  /** Výřez a otočení stránek PDF pro přeložené PDF. */
+  pages?: Map<number, PageGeometry>;
 }
 
 /** Naměřené časy, ze kterých se zpřesňuje odhad příštích úloh. */
@@ -234,9 +242,12 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
     job.pages = selected.length;
     const texts = [];
     for (const p of selected) texts.push(await pageText(docId, p));
+    ctx.pages = new Map(texts.map(({ view, rotate, width, height, invisible }, i) => [selected[i], { view, rotate, width, height, invisible }]));
     const content = removePageFurniture(texts);
     const layouts = texts.map(({ items, width }, i) => ({
       page: selected[i],
+      items: content[i],
+      width,
       blocks: layoutToBlocks(content[i], width, selected[i]),
       scanned: items.reduce((n, it) => n + it.str.trim().length, 0) < SCAN_TEXT_CHARS,
     }));
@@ -257,7 +268,8 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
         continue;
       }
       ctx.progress({ stage: 'ocr', done, total: ocrPages.length, eta: eta.remaining('ocr', done, ocrPages.length) });
-      let result = parseOcr(await ocrPage(ctx, docId, p, 2), p);
+      const size = ctx.pages.get(p)!;
+      let result = parseOcr(await ocrPage(ctx, docId, p, 2), p, size);
       const reference = blocksText(layout.blocks);
       const bad = (b: Block[]) => {
         const text = blocksText(b);
@@ -266,7 +278,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
         const { recall, precision } = wordOverlap(reference, text);
         return recall < OCR_MATCH || precision < OCR_MATCH;
       };
-      if (bad(result)) result = parseOcr(await ocrPage(ctx, docId, p, 3), p); // druhý pokus ve vyšším rozlišení
+      if (bad(result)) result = parseOcr(await ocrPage(ctx, docId, p, 3), p, size); // druhý pokus ve vyšším rozlišení
       if (bad(result)) {
         if (layout.scanned) warnings.set(p, 'OCR této stránky může obsahovat chyby. Zkontroluj ji proti originálu.');
         else {
@@ -279,12 +291,13 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       } else if (!layout.scanned) {
         // Text z obrázků a ikon (sdílení, loga), který v PDF není, se nepřekládá.
         result = result.filter((b) => b.kind === 'table' || wordOverlap(reference, b.text).precision >= 0.5);
+        textLayerGeometry(result, layout.items, layout.width);
       }
       blocks.push(...result);
       done++;
     }
     await repairTables(ctx, docId, blocks);
-    const segments = blocksToSegments(dropDuplicateBlocks(mergeBrokenHeadings(mergeAcrossPages(dropRepeatedBlocks(blocks)))));
+    const segments = blocksToSegments(markDuplicateBlocks(mergeBrokenHeadings(mergeAcrossPages(dropRepeatedBlocks(blocks)))));
     for (const s of segments) if (s.page && warnings.has(s.page)) s.warning ??= warnings.get(s.page);
     return segments;
   } finally {
@@ -444,7 +457,7 @@ async function readContext(ctx: JobContext, segments: Segment[], eta: Eta): Prom
   const { settings, job } = ctx;
   ctx.progress({ stage: 'context', done: 0, total: 0, eta: eta.remaining('context', 0, 0) });
   const sample = segments
-    .filter((s) => s.kind !== 'table')
+    .filter((s) => s.kind !== 'table' && !s.layoutOnly)
     .map((s) => s.source)
     .join('\n\n')
     .slice(0, CONTEXT_CHARS);
@@ -502,7 +515,8 @@ function reviewer(ctx: JobContext, speller: SpellWorker | undefined): Reviewer {
 }
 
 async function checkAll(ctx: JobContext, segments: Segment[], r: Reviewer, eta: Eta) {
-  const todo = segments.filter((s) => s.kind !== 'table');
+  // Citáty jen pro přeložené PDF se nekontrolují ani neopravují.
+  const todo = segments.filter((s) => s.kind !== 'table' && !s.layoutOnly);
   const issues = new Map<Segment, Issue[]>();
   const report = (done: number) => ctx.progress({ stage: 'check', done, total: todo.length, eta: eta.remaining('check', done, todo.length) });
   report(0);
@@ -584,7 +598,7 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   if (!segments.length) throw new Error('V dokumentu se nenašel žádný text.');
   if (ctx.ocrCount) measured.ocrPerPage = (Date.now() - t) / 1000 / ctx.ocrCount;
   job.chars = segments.reduce((n, s) => n + s.source.length, 0);
-  const reviewable = segments.filter((s) => s.kind !== 'table').length;
+  const reviewable = segments.filter((s) => s.kind !== 'table' && !s.layoutOnly).length;
   eta.setPlan({ chars: job.chars, fixes: job.mode === 'fast' ? 0 : Math.round(reviewable * FIX_SHARE) });
   if (job.sourceLang === 'auto') job.sourceLang = detectLanguage(segments);
 
@@ -620,9 +634,50 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   ctx.progress({ stage: 'write', done: 0, total: 0 });
   const dir = store.jobDir(job.id);
   job.output = outputName(job);
-  job.warnings = segments.filter((s) => s.warning).length;
-  await store.saveSegments(job.id, segments);
   await writeFile(path.join(dir, job.output), await buildDocx(job.name, segments));
   await writeFile(path.join(dir, job.output.replace(/\.docx$/, '.md')), segmentsToMarkdown(segments));
+  if (job.ext.toLowerCase() === '.pdf' && settings.layoutPdf && ctx.pages) await writeLayoutPdf(ctx, segments, ctx.pages);
+  job.warnings = segments.filter((s) => s.warning).length;
+  await store.saveSegments(job.id, segments);
   return measured;
+}
+
+/** Stránka vykreslená v pdf.js jako RGBA (nativeImage vrací pixely v pořadí BGRA). */
+async function pageImage(docId: string, page: number, noText: boolean): Promise<PageImage> {
+  const image = nativeImage.createFromDataURL(await renderPage(docId, page, BACKGROUND_SCALE, undefined, noText));
+  const { width, height } = image.getSize();
+  const data = new Uint8Array(image.toBitmap());
+  for (let i = 0; i < data.length; i += 4) [data[i], data[i + 2]] = [data[i + 2], data[i]];
+  return { width, height, data };
+}
+
+/** Přeložené PDF se zachovaným vzhledem; chyba úlohu neshodí, .docx už je uložený. */
+async function writeLayoutPdf(ctx: JobContext, segments: Segment[], pages: Map<number, PageGeometry>) {
+  const { job, store } = ctx;
+  ctx.progress({ stage: 'layout', done: 0, total: 0 });
+  const docId = `${job.id}-layout`;
+  const input = new Uint8Array(await readFile(store.inputPath(job)));
+  try {
+    // Původní dokument zavřel extractPdf; kvůli barvě pozadí se otevře znovu.
+    await openPdf(docId, input.slice());
+    const result = await buildLayoutPdf(input, segments, pages, {
+      fontsDir: path.join(__dirname, 'fonts'),
+      pageImage: (page, noText) => pageImage(docId, page, noText),
+      text: finalText,
+    });
+    for (const [seg, numbers] of result.overflow) {
+      addNotes(seg, numbers.map((n) => `Překlad se na stránce ${n} nevešel do původního místa.`));
+    }
+    if (result.rotated.length) {
+      addJobNote(job, `Otočené stránky (${result.rotated.join(', ')}) zůstaly v přeloženém PDF beze změny.`);
+    }
+    const name = outputPdfName(job);
+    await writeFile(path.join(store.jobDir(job.id), name), result.pdf);
+    job.outputPdf = name;
+  } catch (err) {
+    if (ctx.signal.aborted) throw err;
+    addJobNote(job, `PDF se zachovaným vzhledem se nepodařilo vytvořit: ${(err as Error).message}`);
+  } finally {
+    await closePdf(docId);
+  }
 }

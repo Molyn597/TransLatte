@@ -14,7 +14,7 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron';
 import { languageName } from '../shared/languages';
-import type { GlossaryEntry, Job, JobOptions, Mode, Settings, Stage } from '../shared/types';
+import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, Settings, Stage } from '../shared/types';
 import { status } from './lmstudio';
 import { Queue, SUPPORTED } from './queue';
 import { Store } from './store';
@@ -34,6 +34,7 @@ const STAGE_LABEL: Record<Stage, string> = {
   check: 'Kontrola',
   fix: 'Opravy',
   write: 'Ukládám',
+  layout: 'PDF',
 };
 
 if (process.env.TRANSLATTE_USER_DATA) app.setPath('userData', process.env.TRANSLATTE_USER_DATA);
@@ -166,8 +167,9 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'index.html'));
 }
 
-function jobFile(job: Job) {
-  return job.output ? path.join(store.jobDir(job.id), job.output) : null;
+function jobFile(job: Job, kind: OutputKind = 'docx') {
+  const name = kind === 'pdf' ? job.outputPdf : job.output;
+  return name ? path.join(store.jobDir(job.id), name) : null;
 }
 
 function registerIpc() {
@@ -209,15 +211,20 @@ function registerIpc() {
     const job = await store.job(id);
     return job ? new Uint8Array(await readFile(store.inputPath(job))) : null;
   });
+  ipcMain.handle('job-output-pdf', async (_e, id: string) => {
+    const job = await store.job(id);
+    const file = job && jobFile(job, 'pdf');
+    return file ? new Uint8Array(await readFile(file)) : null;
+  });
   ipcMain.handle('job-cancel', (_e, id: string) => queue.cancel(id));
   ipcMain.handle('job-retry', (_e, id: string, mode: Mode) => queue.retry(id, mode));
   ipcMain.handle('job-delete', async (_e, id: string) => {
     await queue.remove(id);
     send('job-removed', id);
   });
-  ipcMain.handle('job-open', async (_e, id: string) => {
+  ipcMain.handle('job-open', async (_e, id: string, kind?: OutputKind) => {
     const job = await store.job(id);
-    const file = job && jobFile(job);
+    const file = job && jobFile(job, kind);
     if (file) await shell.openPath(file);
   });
   ipcMain.handle('job-reveal', async (_e, id: string) => {
@@ -229,11 +236,14 @@ function registerIpc() {
     const job = await store.job(id);
     const file = job && jobFile(job);
     if (!file) return;
+    const pdf = jobFile(job, 'pdf');
     const res = await dialog.showSaveDialog(win!, {
       defaultPath: path.join(app.getPath('documents'), job.output!),
-      filters: [{ name: 'Word', extensions: ['docx'] }],
+      filters: [{ name: 'Word', extensions: ['docx'] }, ...(pdf ? [{ name: 'PDF', extensions: ['pdf'] }] : [])],
     });
-    if (!res.canceled && res.filePath) await copyFile(file, res.filePath);
+    if (res.canceled || !res.filePath) return;
+    // Typ se pozná podle přípony, kterou dialog doplní podle zvoleného filtru.
+    await copyFile(pdf && path.extname(res.filePath).toLowerCase() === '.pdf' ? pdf : file, res.filePath);
   });
 }
 

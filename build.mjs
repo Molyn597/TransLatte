@@ -39,6 +39,8 @@ await Promise.all([
   ...['cmaps', 'standard_fonts', 'wasm', 'iccs'].map((dir) =>
     cp(`node_modules/pdfjs-dist/${dir}`, `dist/pdfjs/${dir}`, { recursive: true }),
   ),
+  // Noto Sans/Serif (OFL) pro přeložené PDF, včetně licence.
+  cp('build/fonts', 'dist/fonts', { recursive: true }),
   cp('build/icon.png', 'dist/icon.png'),
   cp('build/trayTemplate.png', 'dist/trayTemplate.png'),
   cp('build/trayTemplate@2x.png', 'dist/trayTemplate@2x.png'),

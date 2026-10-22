@@ -20,10 +20,12 @@ import {
 
 GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs';
 
-type Tab = 'compare' | 'translation' | 'original' | 'info';
+type Tab = 'compare' | 'translated-pdf' | 'translation' | 'original' | 'info';
 
 const $ = (id: string) => document.getElementById(id)!;
 const finalText = (s: Segment) => s.edited ?? s.polished ?? s.translation ?? '';
+// Citáty jen pro přeložené PDF se ve Srovnání ani v Překladu nezobrazují.
+const visible = (segments: Segment[]) => segments.filter((s) => !s.layoutOnly);
 const GENDER: Record<DocumentContext['authorGender'], string> = { female: 'žena', male: 'muž', unknown: 'rod neznámý' };
 // Fáze ze starších úloh (celotextové uhlazení), aby jejich doba měla v Informacích popisek.
 const OLD_STAGES: Record<string, string> = { polish: 'Uhlazuji text', glossary: 'Kontroluji glosář' };
@@ -33,6 +35,7 @@ let tab: Tab = 'compare';
 let renderToken = 0;
 
 export const detailJobId = () => current?.job.id ?? null;
+const pdfTab = () => document.querySelector<HTMLButtonElement>('#detail-tabs .tab[data-tab="translated-pdf"]')!;
 
 function meta(job: Job) {
   const chips = [
@@ -80,8 +83,11 @@ function actions(job: Job) {
     return list;
   }
   if (job.status === 'done') {
+    if (job.outputPdf) {
+      list.push(h('button', { class: 'btn primary', onclick: () => window.api.openOutput(job.id, 'pdf') }, icon(ICONS.file), 'Otevřít PDF'));
+    }
     list.push(
-      h('button', { class: 'btn primary', onclick: () => window.api.openOutput(job.id) }, icon(ICONS.file), 'Otevřít Word'),
+      h('button', { class: job.outputPdf ? 'btn' : 'btn primary', onclick: () => window.api.openOutput(job.id, 'docx') }, icon(ICONS.file), 'Otevřít Word'),
       h('button', { class: 'btn', onclick: () => window.api.saveOutputAs(job.id) }, icon(ICONS.download), 'Uložit jako…'),
       h('button', { class: 'btn', onclick: () => window.api.revealOutput(job.id) }, icon(ICONS.folder), 'Ve složce'),
     );
@@ -165,9 +171,12 @@ function documentView(segments: Segment[], text: (s: Segment) => string) {
 }
 
 async function originalView(detail: JobDetail, token: number) {
-  if (detail.job.ext !== '.pdf') return documentView(detail.segments, (s) => s.source);
+  if (detail.job.ext !== '.pdf') return documentView(visible(detail.segments), (s) => s.source);
+  return pdfView(await window.api.readInput(detail.job.id), token);
+}
+
+async function pdfView(data: Uint8Array | null, token: number) {
   const holder = h('div', { class: 'pdf-pages' }, h('p', { class: 'muted' }, 'Načítám PDF…'));
-  const data = await window.api.readInput(detail.job.id);
   if (!data || token !== renderToken) return holder;
   const pdf = await getDocument({ data, ...PDFJS_OPTIONS }).promise;
   holder.replaceChildren();
@@ -199,8 +208,8 @@ function infoView(detail: JobDetail) {
   if (jobDuration(job)) row('Doba zpracování', jobDuration(job));
   if (job.pages) row('Stránek', job.pageRange ? `${job.pages} (výběr ${job.pageRange})` : String(job.pages));
   if (job.chars) row('Znaků originálu', job.chars.toLocaleString('cs-CZ'));
-  row('Odstavců', String(segments.length));
-  if (job.output) row('Výstup', job.output);
+  row('Odstavců', String(visible(segments).length));
+  if (job.output) row('Výstup', job.outputPdf ? `${job.output}, ${job.outputPdf}` : job.output);
   if (job.context) {
     const c = job.context;
     row('Kontext dokumentu', `${c.topic || 'téma neuvedeno'}; autor: ${c.author || 'neuveden'} (${GENDER[c.authorGender]})`);
@@ -230,13 +239,14 @@ async function renderBody() {
   }
   const { job, segments } = current;
   if (tab === 'info') return body.replaceChildren(infoView(current));
-  if (tab === 'original') {
+  if (tab === 'original' || tab === 'translated-pdf') {
     body.replaceChildren(h('p', { class: 'muted' }, 'Načítám…'));
     try {
-      const view = await originalView(current, token);
+      const view = tab === 'original' ? await originalView(current, token) : await pdfView(await window.api.readOutputPdf(job.id), token);
       if (token === renderToken) body.replaceChildren(view);
     } catch (e) {
-      if (token === renderToken) body.replaceChildren(h('div', { class: 'error-box' }, `Originál nejde zobrazit: ${(e as Error).message}`));
+      const what = tab === 'original' ? 'Originál' : 'Přeložené PDF';
+      if (token === renderToken) body.replaceChildren(h('div', { class: 'error-box' }, `${what} nejde zobrazit: ${(e as Error).message}`));
     }
     return;
   }
@@ -245,7 +255,7 @@ async function renderBody() {
       job.status === 'done' ? 'Dokument neobsahuje žádný text.' : job.status === 'error' ? job.error ?? 'Chyba' : 'Výsledek se objeví, až překlad doběhne.';
     return body.replaceChildren(h('p', { class: job.status === 'error' ? 'error-box' : 'empty' }, text));
   }
-  body.replaceChildren(tab === 'compare' ? compareView(segments) : documentView(segments, finalText));
+  body.replaceChildren(tab === 'compare' ? compareView(visible(segments)) : documentView(visible(segments), finalText));
 }
 
 function renderHeader() {
@@ -254,6 +264,8 @@ function renderHeader() {
   $('detail-name').textContent = job.name;
   $('detail-meta').replaceChildren(...meta(job));
   $('detail-actions').replaceChildren(...actions(job));
+  pdfTab().hidden = !job.outputPdf;
+  if (tab === 'translated-pdf' && !job.outputPdf) tab = 'compare';
   renderProgress(job);
 }
 

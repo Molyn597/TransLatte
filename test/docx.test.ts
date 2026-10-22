@@ -16,4 +16,16 @@ describe('buildDocx', () => {
     expect(buffer.includes(Buffer.from('word/document.xml'))).toBe(true);
     expect(buffer.length).toBeGreaterThan(3000);
   });
+
+  it('citát jen pro přeložené PDF do .docx nedá', async () => {
+    const segments: Segment[] = [
+      { id: 0, kind: 'heading', source: 'Quote', translation: 'ZvyraznenyCitat', layoutOnly: true },
+      { id: 1, kind: 'paragraph', source: 'Text', translation: 'ObycejnyText' },
+    ];
+    const zip = await buildDocx('Test', segments);
+    const { default: JSZip } = await import('jszip');
+    const xml = await (await JSZip.loadAsync(zip)).file('word/document.xml')!.async('string');
+    expect(xml).toContain('ObycejnyText');
+    expect(xml).not.toContain('ZvyraznenyCitat');
+  });
 });

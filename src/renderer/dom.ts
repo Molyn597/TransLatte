@@ -59,6 +59,7 @@ export const STAGES: Record<Stage, string> = {
   check: 'Kontroluji překlad',
   fix: 'Opravuji chyby',
   write: 'Ukládám výsledek',
+  layout: 'Skládám PDF',
 };
 
 export function duration(seconds: number) {

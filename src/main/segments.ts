@@ -1,12 +1,19 @@
 import type { TextItem } from '../shared/pdf';
-import type { Segment, SegmentKind } from '../shared/types';
+import type { Rect, Segment, SegmentKind } from '../shared/types';
 
 export interface Block {
   kind: SegmentKind;
   text: string;
   page?: number;
-  /** Umístění na stránce z OCR (0–999), u tabulek pro jejich opravu z výřezu obrázku. */
+  /** Umístění na stránce z OCR (0–999) vůči obrázku stránky. */
   box?: [number, number, number, number];
+  rects?: Rect[];
+  fontSize?: number;
+  serif?: boolean;
+  bold?: boolean;
+  centered?: boolean;
+  /** Jen pro přeložené PDF, ve Srovnání ani v exportu se nezobrazí. */
+  layoutOnly?: boolean;
   /** Tabulka z OCR přišla bez buněk (LM Studio zahazuje tokeny <tr>/<td> DeepSeek-OCR). */
   needsRepair?: boolean;
   warning?: string;
@@ -54,7 +61,7 @@ function htmlTableToMarkdown(html: string): string | null {
  * Výstup Unlimited-OCR (DeepSeek-OCR) má řádky „title [x1, y1, x2, y2]Text“.
  * Jiné vision modely vracejí obyčejný Markdown, ten se zpracuje jako Markdown.
  */
-export function parseOcr(output: string, page: number): Block[] {
+export function parseOcr(output: string, page: number, size?: { width: number; height: number }): Block[] {
   const lines = output.split('\n').filter((l) => l.trim());
   const labelled = /^(\w+) \[([\d.,\s]+)\](.*)$/;
   if (!lines.length || lines.filter((l) => labelled.test(l)).length < lines.length / 2) {
@@ -74,13 +81,13 @@ export function parseOcr(output: string, page: number): Block[] {
     if (skipping) continue;
     const text = cleanOcrText(content);
     if (!text) continue;
-    if (/^title$|heading/i.test(label)) blocks.push({ kind: 'heading', text: text.replace(/^#+\s*/, ''), page });
-    else if (/table/i.test(label)) {
-      const box = coords.split(',').map(Number);
-      blocks.push({ kind: 'table', text, page, box: box.length === 4 ? (box as Block['box']) : undefined });
-    }
-    else blocks.push(...markdownToBlocks(text, page));
+    const numbers = coords.split(',').map(Number);
+    const box = numbers.length === 4 && numbers.every(Number.isFinite) ? (numbers as Block['box']) : undefined;
+    if (/^title$|heading/i.test(label)) blocks.push({ kind: 'heading', text: text.replace(/^#+\s*/, ''), page, box });
+    else if (/table/i.test(label)) blocks.push({ kind: 'table', text, page, box });
+    else blocks.push(...splitBox(markdownToBlocks(text, page), box));
   }
+  if (size) for (const block of blocks) Object.assign(block, ocrGeometry(block, size));
   for (const block of blocks) {
     if (block.kind === 'table' && /<table/i.test(block.text)) {
       const md = htmlTableToMarkdown(block.text);
@@ -92,6 +99,45 @@ export function parseOcr(output: string, page: number): Block[] {
     }
   }
   return blocks;
+}
+
+/** Víc bloků z jednoho štítku OCR si rozdělí jeho výšku podle délky textu. */
+function splitBox(blocks: Block[], box: Block['box']): Block[] {
+  if (!box || blocks.length < 2) return blocks.map((b) => ({ ...b, box }));
+  const [x0, y0, x1, y1] = box;
+  const total = blocks.reduce((n, b) => n + b.text.length, 0);
+  let top = y0;
+  return blocks.map((b) => {
+    const bottom = top + ((y1 - y0) * b.text.length) / total;
+    const part = { ...b, box: [x0, Math.round(top), x1, Math.round(bottom)] as Block['box'] };
+    top = bottom;
+    return part;
+  });
+}
+
+const round = (v: number) => Math.round(v * 10) / 10;
+
+/** Typické písmo bloku z plochy: znak zabere zhruba 0,5 × 1,2 velikosti písma. */
+function estimateFontSize(w: number, h: number, chars: number) {
+  return Math.min(h, Math.sqrt((w * h) / (0.6 * Math.max(1, chars))));
+}
+
+/** Box z OCR (0–999 vůči obrázku stránky) na obdélník v bodech stránky. */
+export function ocrGeometry(block: Block, size: { width: number; height: number }): Pick<Block, 'rects' | 'fontSize' | 'bold'> {
+  if (!block.box || block.page === undefined) return {};
+  const [x0, y0, x1, y1] = block.box.map((v) => Math.min(999, Math.max(0, v)) / 999);
+  const rect: Rect = {
+    page: block.page,
+    x: round(x0 * size.width),
+    y: round(y0 * size.height),
+    w: round((x1 - x0) * size.width),
+    h: round((y1 - y0) * size.height),
+    chars: block.text.length,
+  };
+  if (rect.w <= 0 || rect.h <= 0) return {};
+  // Tabulka má mezi buňkami hodně volného místa, odhad z plochy by vyšel velký.
+  const fontSize = estimateFontSize(rect.w, rect.h, block.text.length) * (block.kind === 'table' ? 0.6 : 1);
+  return { rects: [rect], fontSize: round(fontSize), bold: block.kind === 'heading' };
 }
 
 /** Text tabulky bez hranic buněk; mezery se odhadnou na přechodech „slovoSlovo“ a „slovo123“. */
@@ -123,7 +169,20 @@ export function normalizeMarkdownTable(text: string): string | null {
 interface Line {
   y: number;
   h: number;
+  x0: number;
+  x1: number;
+  /** Úseky řádku oddělené velkou mezerou (sloupce tabulky), aby překrytí nesmazalo čáry mezi nimi. */
+  spans: [number, number][];
   text: string;
+  serif: boolean;
+  bold: boolean;
+}
+
+/** Převažující vlastnost podle počtu znaků. */
+function majority<T extends { str?: string; text?: string }>(list: T[], test: (t: T) => boolean | undefined) {
+  const len = (t: T) => (t.str ?? t.text ?? '').length;
+  const yes = list.filter(test).reduce((n, t) => n + len(t), 0);
+  return yes * 2 > list.reduce((n, t) => n + len(t), 0);
 }
 
 function toLines(items: TextItem[]): Line[] {
@@ -140,13 +199,25 @@ function toLines(items: TextItem[]): Line[] {
       const parts = line.items.sort((a, b) => a.x - b.x);
       let text = '';
       let end = -Infinity;
+      const spans: [number, number][] = [];
       for (const p of parts) {
         const gap = p.x - end;
         if (text && !text.endsWith(' ') && !p.str.startsWith(' ') && gap > p.h * 0.1) text += ' ';
         text += p.str;
-        end = p.x + p.w;
+        if (spans.length && gap < p.h) spans[spans.length - 1][1] = Math.max(spans[spans.length - 1][1], p.x + p.w);
+        else spans.push([p.x, p.x + p.w]);
+        end = Math.max(end, p.x + p.w);
       }
-      return { y: line.y, h: Math.max(...parts.map((p) => p.h)), text: text.replace(/\s+/g, ' ').trim() };
+      return {
+        y: line.y,
+        h: Math.max(...parts.map((p) => p.h)),
+        x0: Math.min(...parts.map((p) => p.x)),
+        x1: Math.max(...parts.map((p) => p.x + p.w)),
+        spans,
+        text: text.replace(/\s+/g, ' ').trim(),
+        serif: majority(parts, (p) => p.serif),
+        bold: majority(parts, (p) => p.bold),
+      };
     })
     .filter((l) => l.text);
 }
@@ -160,18 +231,20 @@ function median(values: number[]) {
 interface Metrics {
   bodyHeight: number;
   lineGap: number;
+  pageWidth: number;
 }
 
-function metrics(lines: Line[]): Metrics {
+function metrics(lines: Line[], pageWidth: number): Metrics {
   const bodyHeight = median(lines.map((l) => l.h));
   const gaps = lines.slice(1).map((l, i) => l.y - lines[i].y);
-  return { bodyHeight, lineGap: median(gaps.filter((g) => g > 0)) || bodyHeight * 1.2 };
+  return { bodyHeight, lineGap: median(gaps.filter((g) => g > 0)) || bodyHeight * 1.2, pageWidth };
 }
 
 // Metriky se berou z celé stránky: skupina nad sloupci (název článku) by jinak sama sebe brala za běžný text.
-function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap }: Metrics): Block[] {
+function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap, pageWidth }: Metrics): Block[] {
   if (!lines.length) return [];
   const blocks: Block[] = [];
+  const members = new Map<Block, Line[]>();
   let current: Block | null = null;
   lines.forEach((line, i) => {
     const isHeading = line.h > bodyHeight * 1.1 && line.text.length < 150;
@@ -191,7 +264,11 @@ function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap }: Met
     if (startsNew) {
       current = { kind: isHeading ? 'heading' : isList ? 'list' : 'paragraph', text: line.text, page };
       blocks.push(current);
-    } else if (current!.kind === 'list' && isList) {
+      members.set(current, [line]);
+      return;
+    }
+    members.get(current!)!.push(line);
+    if (current!.kind === 'list' && isList) {
       current!.text += `\n${line.text}`;
     } else if (/[\p{L}]-$/u.test(current!.text) && /^\p{Ll}/u.test(line.text)) {
       current!.text = current!.text.slice(0, -1) + line.text; // rozdělené slovo na konci řádku
@@ -199,7 +276,52 @@ function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap }: Met
       current!.text += ` ${line.text}`;
     }
   });
+  for (const block of blocks) Object.assign(block, lineGeometry(members.get(block)!, page, block, pageWidth));
   return blocks;
+}
+
+/** Obálka řádků bloku; dolní okraj včetně dotažnic (účaří je na y + h). */
+function lineGeometry(lines: Line[], page: number, block: Block, pageWidth: number): Pick<Block, 'rects' | 'fontSize' | 'serif' | 'bold' | 'centered'> {
+  const top = Math.min(...lines.map((l) => l.y));
+  const bottom = Math.max(...lines.map((l) => l.y + l.h * 1.2));
+  const x0 = Math.min(...lines.map((l) => l.x0));
+  const x1 = Math.max(...lines.map((l) => l.x1));
+  const cover = lines.flatMap((l) => l.spans.map(([a, b]) => [round(a), round(l.y), round(b - a), round(l.h * 1.2)] as [number, number, number, number]));
+  const rect: Rect = { page, x: round(x0), y: round(top), w: round(x1 - x0), h: round(bottom - top), chars: block.text.length, cover };
+  // Na střed: víc řádků se stejným středem a různým začátkem, nebo jeden kratší řádek uprostřed stránky.
+  const centers = lines.map((l) => (l.x0 + l.x1) / 2);
+  const centered =
+    lines.length > 1
+      ? Math.max(...centers) - Math.min(...centers) < 3 && Math.max(...lines.map((l) => l.x0)) - x0 > 6
+      : Math.abs(centers[0] - pageWidth / 2) < pageWidth * 0.01 && x1 - x0 < pageWidth * 0.7;
+  return {
+    rects: [rect],
+    fontSize: round(median(lines.map((l) => l.h))),
+    serif: majority(lines, (l) => l.serif),
+    bold: block.kind === 'heading' || majority(lines, (l) => l.bold),
+    ...(centered && { centered }),
+  };
+}
+
+/**
+ * Bloky z OCR na digitální stránce: písmo, typ a plochy řádků podle textové vrstvy pod boxem
+ * (velikost odhadnutá z boxu bývá nepřesná a celý box by překryl i čáry tabulky).
+ */
+export function textLayerGeometry(blocks: Block[], items: TextItem[], pageWidth: number) {
+  const real = items.filter((i) => i.str.trim());
+  for (const block of blocks) {
+    const rect = block.rects?.[0];
+    if (!rect || block.rects!.length > 1) continue;
+    const inside = real.filter((i) => {
+      const cx = i.x + i.w / 2;
+      const cy = i.y + i.h / 2;
+      return cx >= rect.x - 3 && cx <= rect.x + rect.w + 3 && cy >= rect.y - 3 && cy <= rect.y + rect.h + 3;
+    });
+    const lines = toLines(inside);
+    if (!lines.length) continue;
+    const { rects, ...style } = lineGeometry(lines, rect.page, block, pageWidth);
+    Object.assign(block, style, { rects: [{ ...rects![0], chars: rect.chars }] });
+  }
 }
 
 /**
@@ -217,7 +339,7 @@ export function layoutToBlocks(items: TextItem[], pageWidth: number, page: numbe
   const chars = (list: TextItem[]) => list.reduce((n, i) => n + i.str.length, 0);
   const total = chars(real);
   const twoColumns = chars(left) > total * 0.25 && chars(right) > total * 0.25 && chars(spanning) < total * 0.3;
-  const pageMetrics = metrics(toLines(twoColumns ? left : real));
+  const pageMetrics = metrics(toLines(twoColumns ? left : real), pageWidth);
   if (!twoColumns) return linesToBlocks(toLines(real), page, pageMetrics);
 
   const columnsTop = Math.min(...[...left, ...right].map((i) => i.y));
@@ -284,6 +406,7 @@ export function mergeAcrossPages(blocks: Block[]): Block[] {
     ) {
       prev.text = /\p{L}-$/u.test(prev.text) && /^\p{Ll}/u.test(b.text) ? prev.text.slice(0, -1) + b.text : `${prev.text} ${b.text}`;
       if (b.warning) prev.warning ??= b.warning;
+      joinRects(prev, b);
       continue;
     }
     out.push({ ...b });
@@ -298,6 +421,7 @@ export function mergeBrokenHeadings(blocks: Block[]): Block[] {
     const prev = out[out.length - 1];
     if (prev?.kind === 'heading' && b.kind === 'heading' && prev.page === b.page && /^\p{Ll}/u.test(b.text)) {
       prev.text = `${prev.text} ${b.text}`;
+      joinRects(prev, b);
       continue;
     }
     out.push({ ...b });
@@ -305,22 +429,28 @@ export function mergeBrokenHeadings(blocks: Block[]): Block[] {
   return out;
 }
 
+function joinRects(into: Block, from: Block) {
+  if (into.rects || from.rects) into.rects = [...(into.rects ?? []), ...(from.rects ?? [])];
+}
+
 const normalized = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(' ');
 
 /**
- * Zvýrazněný citát opakuje větu z článku; překládal by se dvakrát a bez kontextu.
- * Blok, jehož text je celý obsažený v jiném bloku, se zahodí (u shody zůstane odstavec, ne nadpis).
+ * Zvýrazněný citát opakuje větu z článku; ve Srovnání a exportu by byl dvakrát.
+ * Blok, jehož text je celý obsažený v jiném bloku, se přeloží jen pro přeložené PDF
+ * (u shody zůstane viditelný odstavec, ne nadpis).
  */
-export function dropDuplicateBlocks(blocks: Block[]): Block[] {
+export function markDuplicateBlocks(blocks: Block[]): Block[] {
   const norms = blocks.map((b) => normalized(b.text));
-  return blocks.filter((b, i) => {
-    if (norms[i].length < 40 || b.kind === 'table') return true;
-    return !norms.some((other, j) => {
+  return blocks.map((b, i) => {
+    if (norms[i].length < 40 || b.kind === 'table') return b;
+    const duplicate = norms.some((other, j) => {
       if (j === i || !other.includes(norms[i])) return false;
       if (other.length > norms[i].length) return true;
-      // Stejný text: zahodit nadpis před odstavcem, u stejného druhu pozdější výskyt.
+      // Stejný text: skrýt nadpis před odstavcem, u stejného druhu pozdější výskyt.
       return blocks[j].kind === b.kind ? j < i : b.kind === 'heading';
     });
+    return duplicate ? { ...b, layoutOnly: true } : b;
   });
 }
 
@@ -331,7 +461,17 @@ export function stripAddedPeriod(source: string, translation: string) {
 
 export function blocksToSegments(blocks: Block[]): Segment[] {
   // Samotné symboly (☰, ikony z webu) nejsou text k překladu.
-  return blocks.filter((b) => /[\p{L}\p{N}]/u.test(b.text)).map((b, id) => ({ id, kind: b.kind, page: b.page, source: b.text, ...(b.warning && { warning: b.warning }) }));
+  return blocks
+    .filter((b) => /[\p{L}\p{N}]/u.test(b.text))
+    .map((b, id) => ({
+      id,
+      kind: b.kind,
+      page: b.page,
+      source: b.text,
+      ...(b.warning && { warning: b.warning }),
+      ...(b.rects?.length && { rects: b.rects, fontSize: b.fontSize, serif: b.serif, bold: b.bold, centered: b.centered }),
+      ...(b.layoutOnly && { layoutOnly: true }),
+    }));
 }
 
 /** Indexy segmentů seskupené do dávek pro překlad; tabulky jdou samostatně. */
@@ -385,8 +525,11 @@ export function splitBatch(text: string, expected: number): string[] | null {
 
 export const finalText = (s: Segment) => s.edited ?? s.polished ?? s.translation ?? s.source;
 
+/** Segmenty pro Srovnání, Překlad a export (bez těch, které jsou jen pro přeložené PDF). */
+export const visibleSegments = (segments: Segment[]) => segments.filter((s) => !s.layoutOnly);
+
 export function segmentsToMarkdown(segments: Segment[], text: (s: Segment) => string = finalText): string {
-  return segments
+  return visibleSegments(segments)
     .map((s) => (s.kind === 'heading' ? `## ${text(s).replace(/^#+\s*/, '')}` : text(s)))
     .join('\n\n');
 }
