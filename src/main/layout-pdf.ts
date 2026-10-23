@@ -582,7 +582,8 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
   };
   const items = segments
     .map((segment) => ({ segment, rects: segment.rects?.filter(usable) ?? [], text: clean(options.text(segment)).trim() }))
-    .filter((i) => i.rects.length && i.text)
+    // Nezměněný text (čísla, ponechaný originál) zůstane v PDF tak, jak byl: jeho písmo nemusí jít znovu vysázet.
+    .filter((i) => i.rects.length && i.text && !sameText(i.text, i.segment.source))
     .map((i) => ({ ...i, marks: i.segment.links && i.segment.kind !== 'table' ? wordMarks(i.text, findAnchors(i.text, i.segment.links, i.segment.source)) : [] }));
   const styles = new Map<SegmentLink, LinkStyle>();
 
@@ -839,6 +840,8 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
 }
 
 type Piece = { page: number; x: number; y: number; width: number; height: number };
+
+const sameText = (a: string, b: string) => clean(a).replace(/\s+/g, ' ').trim() === clean(b).replace(/\s+/g, ' ').trim();
 
 const fontKey = (s: Segment): keyof typeof FONT_FILES =>
   s.bold || s.kind === 'heading' ? (s.serif ? 'serifBold' : 'sansBold') : s.serif ? 'serif' : 'sans';
