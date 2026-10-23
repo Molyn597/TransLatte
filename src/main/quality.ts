@@ -177,3 +177,29 @@ export function findAnchors(text: string, links: { source: string; target?: stri
     return (found[i] = quotedRange(text, links[i].source, source, taken));
   });
 }
+
+// Fráze, kterými model místo překladu odpoví omluvou, dotazem nebo popisem (česky i anglicky).
+const REFUSAL_PHRASES = [
+  /omlouv[aá]m se/i,
+  /nerozum[ií]m/i,
+  /nemohu (to|jej|je|ho|ji|tento|tyto)?\s*přeložit/i,
+  /mohl(a)? byste/i,
+  /můžete mi poskytnout/i,
+  /poskytněte/i,
+  /zde následuje/i,
+  /nelze přesně přeložit/i,
+  /i['’]?m sorry/i,
+  /i apologi[sz]e/i,
+  /i (cannot|can['’]?t|am unable to|do not understand|don['’]?t understand)/i,
+  /please provide/i,
+  /could you (please )?(provide|clarify|repeat|send)/i,
+];
+
+/** Model místo překladu odpověděl omluvou nebo dotazem; jeho výstup se nesmí použít. */
+export function isRefusal(source: string, output: string): boolean {
+  // Aspoň dvě různé fráze: jedna („Mohl byste…“) bývá i v řádném překladu otázky.
+  const phrases = REFUSAL_PHRASES.filter((p) => p.test(output)).length;
+  // Zdroj, který sám obsahuje takovou frázi („I'm sorry“), se překládá správně.
+  if (phrases >= 2 && !REFUSAL_PHRASES.some((p) => p.test(source))) return true;
+  return source.length < 40 && output.length > 60 && output.length > source.length * 3 && /\?|přeložit|translate/i.test(output);
+}

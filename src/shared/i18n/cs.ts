@@ -201,6 +201,7 @@ export const cs = {
   'pipeline.ocrErrors': 'OCR této stránky může obsahovat chyby. Zkontroluj ji proti originálu.',
   'pipeline.ocrMismatch': 'OCR se neshodovalo s textem v PDF, proto je použit text přímo z PDF (může mít horší pořadí odstavců).',
   'pipeline.mayBeIncomplete': 'Překlad tohoto odstavce může být neúplný.',
+  'pipeline.keptOriginal': 'Model text nepřeložil, ponechán originál.',
   'pipeline.noContext': 'Kontext dokumentu se nepodařilo zjistit, opravy proběhly bez něj.',
   'pipeline.spellSkipped': 'Kontrola pravopisu se přeskočila: {error}',
   'pipeline.spellInterrupted': 'Kontrola pravopisu se přerušila: {error}',

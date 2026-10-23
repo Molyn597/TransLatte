@@ -12,6 +12,7 @@ import {
   inkDifference,
   lineRuns,
   linkStyle,
+  pageChains,
   wordMarks,
   visiblePart,
   splitText,
@@ -21,6 +22,7 @@ import {
   wrapText,
   type Measure,
   type PageGeometry,
+  type Placement,
 } from '../src/main/layout-pdf';
 import type { Segment } from '../src/shared/types';
 
@@ -278,5 +280,103 @@ describe('odkazy', () => {
     expect(moved.x).toBeGreaterThan(70);
     expect(moved.x).toBeLessThan(150);
     expect(moved.y).toBeGreaterThan(730);
+  });
+});
+
+describe('sloupce a řetězy rámů', () => {
+  const block = (o: { x: number; y: number; w: number; rows: number; text?: string; kind?: Segment['kind']; below?: number; anchored?: boolean }): Placement => {
+    const text = o.text ?? 'Lorem ipsum dolor sit amet';
+    return {
+      segment: { id: 0, kind: o.kind ?? 'paragraph', source: text },
+      rect: {
+        page: 1,
+        x: o.x,
+        y: o.y,
+        w: o.w,
+        h: o.rows * 14,
+        cover: Array.from({ length: o.rows }, (_, i): [number, number, number, number] => [o.x, o.y + i * 14, o.w, 12]),
+      },
+      color: [1, 1, 1],
+      ruled: false,
+      right: o.x + o.w,
+      room: 0,
+      below: o.below ?? 1000,
+      anchored: o.anchored ?? false,
+      text,
+      firstWord: 0,
+      marks: [],
+    };
+  };
+
+  it('dva sloupce dají řetěz se dvěma rámy, každý s pravými členy', () => {
+    const lA = block({ x: 70, y: 100, w: 210, rows: 5 });
+    const lB = block({ x: 70, y: 176, w: 210, rows: 5 });
+    const rA = block({ x: 300, y: 100, w: 210, rows: 5 });
+    const rB = block({ x: 300, y: 176, w: 210, rows: 5 });
+    const chains = pageChains([lA, lB, rA, rB]);
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toHaveLength(2);
+    expect(chains[0][0].members).toEqual([lA, lB]);
+    expect(chains[0][1].members).toEqual([rA, rB]);
+    expect(chains[0][0].x).toBe(70);
+    expect(chains[0][0].w).toBe(210);
+  });
+
+  it('chybně širší blok nezvětší šířku levého rámu', () => {
+    const wide = block({ x: 70, y: 100, w: 237, rows: 5 });
+    const lB = block({ x: 70, y: 176, w: 210, rows: 5 });
+    const lC = block({ x: 70, y: 252, w: 210, rows: 5 });
+    const r = block({ x: 300, y: 100, w: 210, rows: 5 });
+    const chains = pageChains([wide, lB, lC, r]);
+    const left = chains.flat().find((f) => f.x === 70)!;
+    expect(left.w).toBe(210);
+    expect(left.x + left.w).toBeLessThanOrEqual(300 - 6);
+  });
+
+  it('blok vedle sebe ve stejné výšce omezí šířku levého rámu', () => {
+    const lA = block({ x: 70, y: 100, w: 210, rows: 5 });
+    const lB = block({ x: 70, y: 176, w: 210, rows: 5 });
+    const side = block({ x: 285, y: 100, w: 210, rows: 5 });
+    const chains = pageChains([lA, lB, side]);
+    const left = chains.flat().find((f) => f.x === 70)!;
+    expect(left.w).toBe(285 - 6 - 70);
+  });
+
+  it('obrázek mezi bloky, na který below nestačí, rozdělí sloupec na dva rámy', () => {
+    const a = block({ x: 70, y: 100, w: 210, rows: 5, below: 10 });
+    const b = block({ x: 70, y: 200, w: 210, rows: 5 });
+    const chains = pageChains([a, b]);
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toHaveLength(2);
+    expect(chains[0][0].members).toEqual([a]);
+    expect(chains[0][1].members).toEqual([b]);
+  });
+
+  it('blok s anchored dostane vlastní rám', () => {
+    const a = block({ x: 70, y: 100, w: 210, rows: 5 });
+    const mid = block({ x: 70, y: 176, w: 210, rows: 5, anchored: true });
+    const c = block({ x: 70, y: 252, w: 210, rows: 5 });
+    const chains = pageChains([a, mid, c]);
+    const frames = chains.flat();
+    expect(frames.find((f) => f.members.includes(mid))!.members).toEqual([mid]);
+    expect(frames.find((f) => f.members.includes(a))!.members).toEqual([a]);
+    expect(frames.find((f) => f.members.includes(c))!.members).toEqual([c]);
+  });
+
+  it('široké záhlaví přes celou stránku nepatří do rámu sloupce', () => {
+    const header = block({ x: 70, y: 60, w: 440, rows: 1, kind: 'heading', text: 'Záhlaví' });
+    const a = block({ x: 70, y: 100, w: 210, rows: 5 });
+    const b = block({ x: 70, y: 176, w: 210, rows: 5 });
+    const chains = pageChains([header, a, b]);
+    const frames = chains.flat();
+    expect(frames.some((f) => f.members.includes(header))).toBe(false);
+    const column = frames.find((f) => f.members.includes(a))!;
+    expect(column.members).toEqual([a, b]);
+    expect(column.w).toBe(210);
+  });
+
+  it('samostatný krátký blok se nevrátí', () => {
+    const short = block({ x: 70, y: 100, w: 210, rows: 2 });
+    expect(pageChains([short])).toEqual([]);
   });
 });

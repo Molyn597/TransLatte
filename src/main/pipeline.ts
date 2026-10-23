@@ -22,7 +22,7 @@ import {
   translateGemmaPrompt,
   translateSystem,
 } from './prompts';
-import { findAnchors, hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
+import { findAnchors, hasRepetition, isRefusal, relevantGlossary, suspiciousLength, wordOverlap } from './quality';
 import {
   acceptFix,
   applyDeterministic,
@@ -358,7 +358,10 @@ async function translateTable(ctx: JobContext, table: string) {
   const unique = [...new Set(cells)];
   const translated = new Map<string, string>();
   const batch = splitBatch(await translateText(ctx, unique.join('\n\n')), unique.length);
-  for (const [i, c] of unique.entries()) translated.set(c, batch ? batch[i] : await translateText(ctx, c));
+  for (const [i, c] of unique.entries()) {
+    const out = batch ? batch[i] : await translateText(ctx, c);
+    if (!isRefusal(c, out)) translated.set(c, out);
+  }
   return rows
     .map((row) =>
       /^\|[\s|:-]+\|$/.test(row.trim())
@@ -378,11 +381,14 @@ async function translateLinks(ctx: JobContext, segments: Segment[]) {
   if (!unique.length) return;
   const batch = splitBatch(await translateText(ctx, unique.join('\n\n')), unique.length);
   const translated = new Map<string, string>();
-  for (const [i, text] of unique.entries()) translated.set(text, stripAddedPeriod(text, batch ? batch[i] : await translateText(ctx, text)));
+  for (const [i, text] of unique.entries()) {
+    const out = batch ? batch[i] : await translateText(ctx, text);
+    if (!isRefusal(text, out)) translated.set(text, stripAddedPeriod(text, out));
+  }
   for (const link of links) link.target = translated.get(link.source);
 }
 
-const looksWrong = (source: string, out: string) => !out || suspiciousLength(source, out) || hasRepetition(out);
+const looksWrong = (source: string, out: string) => !out || suspiciousLength(source, out) || hasRepetition(out) || isRefusal(source, out);
 
 /** Část odstavce k překladu; dlouhé odstavce se dělí po větách, aby šly zpracovat souběžně. */
 interface Unit {
@@ -455,7 +461,10 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
         if (parts && !looksWrong(u.prepared, parts[i])) u.translation = parts[i];
         else {
           u.translation = await translateText(ctx, u.prepared);
-          if (looksWrong(u.prepared, u.translation)) addNotes(u.seg, [t('pipeline.mayBeIncomplete')]);
+          if (isRefusal(u.prepared, u.translation)) {
+            u.translation = u.prepared;
+            addNotes(u.seg, [t('pipeline.keptOriginal')]);
+          } else if (looksWrong(u.prepared, u.translation)) addNotes(u.seg, [t('pipeline.mayBeIncomplete')]);
         }
       }
       report(items.reduce((n, u) => n + u.source.length, 0));

@@ -41,6 +41,8 @@ const INK_PIXELS = 2;
 const BLANK_TOLERANCE = 8;
 // Nejvýš tolik bodů pod odstavcem smí překlad využít, než se začne zmenšovat písmo.
 const MAX_ROOM = 40;
+// Plocha řádku z textové vrstvy je 1,2× výška písma (segments.ts).
+const LINE_BOX = 1.2;
 // Pás vlevo od bloku, kde se hledají odrážky kreslené jako grafika.
 const GUTTER = 18;
 const FONT_FILES = {
@@ -509,7 +511,7 @@ function isolate(doc: PDFDocument, page: PDFPage) {
 // Viditelný text změní aspoň pár procent pixelů svého řádku.
 const VISIBLE_INK = 0.01;
 
-interface Placement {
+export interface Placement {
   segment: Segment;
   rect: Rect;
   color: Color;
@@ -656,7 +658,9 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     // Odhad velikosti písma z OCR kolísá blok od bloku; odstavce na stránce se drží kolem mediánu.
     const bodySize = median(placements.filter((p) => p.segment.kind === 'paragraph' && p.segment.fontSize).map((p) => p.segment.fontSize!));
     const textSize = (p: Placement) => {
-      const own = p.segment.fontSize ?? bodySize ?? 10;
+      // Velikost z řádků na této stránce; odstavec slitý přes stránky může mít jinde jiné písmo.
+      const lines = (p.rect.cover ?? []).map(([, , , h]) => h / LINE_BOX);
+      const own = (lines.length ? median(lines) : undefined) ?? p.segment.fontSize ?? bodySize ?? 10;
       // Velikost z textové vrstvy je přesná; ke středu se táhnou jen odhady z OCR.
       return p.segment.kind === 'paragraph' && bodySize && !p.rect.cover ? Math.min(Math.max(own, bodySize * 0.9), bodySize * 1.1) : own;
     };
@@ -704,15 +708,23 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
       ].filter(([a, b]) => b - a > 0.5);
       return parts.every(([a, b]) => !hasInk(bare, { x: x * bpx, y: a * bpx, w: w * bpx, h: (b - a) * bpx }, members[block].color));
     };
-    // Každý řetěz zvlášť; sloupce jednoho textu jsou v jednom řetězu, takže mají stejné písmo.
-    const results = prepared.map(({ chain, blocks }) => {
-      let result = { lines: [] as PlacedLine[], overflow: true };
-      for (const attempt of ATTEMPTS) {
-        result = flow(blocks, chain.frames, attempt, free(chain.frames.flatMap((f) => f.members)));
-        if (!result.overflow) break;
+    // Pro každý řetěz první pokus, při kterém se vejde (jinak poslední).
+    const fitted = prepared.map(({ chain, blocks }) => {
+      const check = free(chain.frames.flatMap((f) => f.members));
+      for (const [i, attempt] of ATTEMPTS.entries()) {
+        const result = flow(blocks, chain.frames, attempt, check);
+        if (!result.overflow || i === ATTEMPTS.length - 1) return { attempt: i, result };
       }
-      return result;
+      throw new Error('unreachable');
     });
+    // Odstavcový text celé stránky (všechny sloupce) dostane stejné zmenšení; krátké bloky zvlášť.
+    const body = (c: number) => prepared[c].chain.frames.some((f) => f.members.some((p) => p.segment.kind === 'paragraph' && rows(p.rect.cover) >= 3));
+    const pageAttempt = Math.max(-1, ...fitted.filter((_, c) => body(c)).map((f) => f.attempt));
+    const results = fitted.map(({ attempt, result }, c) =>
+      body(c) && attempt < pageAttempt
+        ? flow(prepared[c].blocks, prepared[c].chain.frames, ATTEMPTS[pageAttempt], free(prepared[c].chain.frames.flatMap((f) => f.members)))
+        : result,
+    );
     for (const [c, { lines }] of results.entries()) {
       const members = prepared[c].chain.frames.flatMap((f) => f.members);
       for (const line of lines) {
@@ -831,12 +843,14 @@ type Piece = { page: number; x: number; y: number; width: number; height: number
 const fontKey = (s: Segment): keyof typeof FONT_FILES =>
   s.bold || s.kind === 'heading' ? (s.serif ? 'serifBold' : 'sansBold') : s.serif ? 'serif' : 'sans';
 
-interface ChainFrame extends Frame {
+export interface ChainFrame extends Frame {
   members: Placement[];
 }
 
 // Mezera mezi koncem rámu a dalším obsahem pod ním.
 const FRAME_GAP = 4;
+// Nejmenší mezera mezi sloupci.
+const COLUMN_GAP = 6;
 
 const overlapX = (a: Box, b: Box) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
 const rows = (cover: Rect['cover']) => new Set((cover ?? []).map(([, y]) => Math.round(y))).size;
@@ -846,7 +860,7 @@ const rows = (cover: Rect['cover']) => new Set((cover ?? []).map(([, y]) => Math
  * Rámy podobné šířky za sebou (v pořadí čtení) tvoří řetěz, kterým text přetéká.
  * Samostatný krátký blok (záhlaví, popisek) se sází po staru do svého místa.
  */
-function pageChains(placements: Placement[]): ChainFrame[][] {
+export function pageChains(placements: Placement[]): ChainFrame[][] {
   const candidates = placements.filter((p) => p.text && p.segment.kind !== 'table' && p.rect.cover?.length && !p.segment.centered);
   const columns: Placement[][] = [];
   for (const p of candidates) {
@@ -866,7 +880,8 @@ function pageChains(placements: Placement[]): ChainFrame[][] {
   const frames: ChainFrame[] = [];
   for (const column of columns) {
     const full = column.filter((p) => rows(p.rect.cover) >= 3);
-    const width = Math.max(...(full.length ? full : column).map((p) => p.rect.x + p.rect.w)) - Math.min(...column.map((p) => p.rect.x));
+    // Pravý okraj sloupce podle typického odstavce; jeden chybně změřený blok sloupec nerozšíří.
+    const width = median((full.length ? full : column).map((p) => p.rect.x + p.rect.w))! - Math.min(...column.map((p) => p.rect.x));
     const sorted = [...column].sort((a, b) => a.rect.y - b.rect.y);
     let members: Placement[] = [];
     const close = () => {
@@ -875,7 +890,12 @@ function pageChains(placements: Placement[]): ChainFrame[][] {
       const bottom = last.rect.y + last.rect.h;
       const room = bottom >= pageBottom - 1 ? Math.min(last.below, MAX_ROOM) : Math.min(last.below, pageBottom - bottom);
       const x = Math.min(...members.map((p) => p.rect.x));
-      frames.push({ x, w: width, top: members[0].rect.y, bottom: bottom + Math.max(0, room - FRAME_GAP), members });
+      const top = members[0].rect.y;
+      const end = bottom + Math.max(0, room - FRAME_GAP);
+      // Rám nesmí zasáhnout do sousedního sloupce ani bloku vpravo vedle sebe.
+      const neighbours = placements.filter((o) => !members.includes(o) && o.rect.x > x + COLUMN_GAP && o.rect.y < end && o.rect.y + o.rect.h > top);
+      const limit = Math.min(...neighbours.map((o) => o.rect.x - COLUMN_GAP));
+      frames.push({ x, w: Math.max(1, Math.min(width, limit - x)), top, bottom: end, members });
       members = [];
     };
     sorted.forEach((p, i) => {

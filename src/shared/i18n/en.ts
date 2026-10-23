@@ -204,6 +204,7 @@ export const en: Record<keyof typeof cs, Message> = {
   'pipeline.ocrErrors': 'The OCR of this page may contain errors. Check it against the original.',
   'pipeline.ocrMismatch': 'The OCR did not match the text in the PDF, so the text taken directly from the PDF is used (the paragraphs may be in a worse order).',
   'pipeline.mayBeIncomplete': 'The translation of this paragraph may be incomplete.',
+  'pipeline.keptOriginal': 'The model did not translate the text; the original was kept.',
   'pipeline.noContext': 'The document context could not be determined; fixes were made without it.',
   'pipeline.spellSkipped': 'The spell check was skipped: {error}',
   'pipeline.spellInterrupted': 'The spell check was interrupted: {error}',

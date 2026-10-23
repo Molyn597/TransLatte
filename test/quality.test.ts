@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findAnchors, glossaryMisses, hasRepetition, relevantGlossary, suspiciousLength, wordOverlap } from '../src/main/quality';
+import { findAnchors, glossaryMisses, hasRepetition, isRefusal, relevantGlossary, suspiciousLength, wordOverlap } from '../src/main/quality';
 
 describe('wordOverlap', () => {
   const reference = 'Rapid urbanization has reduced the amount of natural space available to many people.';
@@ -100,5 +100,39 @@ describe('odkazy v překladu', () => {
     const [a, b, c] = findAnchors(text, [{ source: 'here', target: 'zde' }, { source: 'here', target: 'zde' }, { source: 'missing', target: 'chybí' }], 'x');
     expect([a!.start, b!.start]).toEqual([9, 18]);
     expect(c).toBeNull();
+  });
+});
+
+describe('isRefusal', () => {
+  it('pozná omluvu a dotaz modelu místo překladu', () => {
+    const answers = [
+      'Omlouvám se, ale nerozumím znakům, které jste mi poskytl. Nemohu je přeložit do češtiny. Mohl byste zkusit jiný způsob komunikace?',
+      'Omlouvám se, ale nerozumím tomuto textu. Nemohu jej přeložit do češtiny. Mohl byste mi poskytnout jiný text?',
+      'Omlouvám se, ale nerozumím těmto znakům. Mohl byste je zopakovat nebo mi poslat v jiném formátu?',
+      'Omlouvám se, ale nerozumím tomuto vstupu. Můžete mi poskytnout další informace?',
+      '[Zde následuje tabulka s daty a textem, který nelze přesně přeložit bez kontextu. Z důvodu omezení délky odpovědi je zde ponecháno jako "zde následuje tabulka..."]',
+      "I'm sorry, but I cannot translate this text. Could you please provide more context?",
+    ];
+    for (const a of answers) expect(isRefusal('0 5 10 15', a)).toBe(true);
+  });
+
+  it('běžný překlad není odmítnutí', () => {
+    expect(isRefusal('The cat sat on the mat.', 'Kočka seděla na rohoži.')).toBe(false);
+  });
+
+  it('zdroj s omluvou se překládá normálně', () => {
+    expect(isRefusal('I\'m sorry for the delay.', 'Omlouvám se za zpoždění.')).toBe(false);
+  });
+
+  it('překlad otázky s jednou frází („Mohl byste…“) není odmítnutí', () => {
+    expect(isRefusal('Would you mind sharing your notes with the team after the meeting?', 'Mohl byste po schůzce sdílet své poznámky s týmem?')).toBe(false);
+  });
+
+  it('krátký zdroj bez změny není odmítnutí', () => {
+    expect(isRefusal('1998', '1998')).toBe(false);
+  });
+
+  it('krátký zdroj s dlouhým výstupem s otazníkem je odmítnutí', () => {
+    expect(isRefusal('km/h', 'Tomuto textu bohužel nic nedává smysl, můžete upřesnit, co mám přeložit v tomto případě?')).toBe(true);
   });
 });
