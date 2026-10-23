@@ -203,6 +203,7 @@ export const en: Record<keyof typeof cs, Message> = {
   'spell.missingFiles': 'The Czech dictionary archive is missing the files index.aff and index.dic.',
   'spell.exited': 'The spell check stopped (code {code}).',
   'pipeline.noText': 'No text was found in the document.',
+  'pipeline.alreadyTarget': 'The document is already in the target language ({lang}); there is nothing to translate. Is it an already translated file? To process it anyway, choose the source language manually.',
   'pipeline.tableUnread': 'A table without text (an image or outlines) could not be read and is missing from the translation. Check it against the original.',
   'pipeline.tableFallback': 'The table could not be read cell by cell and was converted to text. Check it against the original.',
   'pipeline.ocrErrors': 'The OCR of this page may contain errors. Check it against the original.',

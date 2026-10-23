@@ -200,6 +200,7 @@ export const cs = {
   'spell.missingFiles': 'V archivu českého slovníku chybí soubory index.aff a index.dic.',
   'spell.exited': 'Kontrola pravopisu skončila (kód {code}).',
   'pipeline.noText': 'V dokumentu se nenašel žádný text.',
+  'pipeline.alreadyTarget': 'Dokument už je v cílovém jazyce ({lang}), není co překládat. Není to už přeložený soubor? Pokud ho chceš zpracovat i tak, zvol jazyk originálu ručně.',
   'pipeline.tableUnread': 'Tabulku bez textu (obrázek nebo křivky) se nepodařilo přečíst, v překladu chybí. Zkontroluj ji proti originálu.',
   'pipeline.tableFallback': 'Tabulku se nepodařilo přečíst po buňkách, je převedená na text. Zkontroluj ji proti originálu.',
   'pipeline.ocrErrors': 'OCR této stránky může obsahovat chyby. Zkontroluj ji proti originálu.',

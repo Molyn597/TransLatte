@@ -4,7 +4,7 @@ import { nativeImage } from 'electron';
 import mammoth from 'mammoth';
 import { detect } from 'tinyld';
 import { messagePattern, t } from '../shared/i18n';
-import { isSupported } from '../shared/languages';
+import { isSupported, languageName } from '../shared/languages';
 import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, RegionTranslation, Segment, Settings, Stage } from '../shared/types';
 import { selectPages } from '../shared/pages';
 import { findRegion, normalizeCrop, pendingSegments } from '../shared/regions';
@@ -271,6 +271,9 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
     }));
     // Rychlý režim čte digitální stránky z textové vrstvy, OCR jen u skenů.
     const ocrPages = layouts.filter((l) => job.mode !== 'fast' || l.scanned).map((l) => l.page);
+    // Digitální PDF se pozná už z textové vrstvy, dřív než se spustí OCR.
+    const layerText = layouts.map((l) => blocksText(l.blocks)).join('\n');
+    if (job.sourceLang === 'auto' && layerText.length > 500) rejectSameLanguage(job, detectLanguage(layerText));
     eta.setPlan({ ocrPages: ocrPages.length, chars: layouts.reduce((n, l) => n + blocksText(l.blocks).length, 0) });
     ctx.ocrCount = ocrPages.length;
     if (ocrPages.length) await ensureModel(settings.models.ocr, ID.ocr);
@@ -618,13 +621,14 @@ async function fixAll(ctx: JobContext, found: Map<Segment, Issue[]>, r: Reviewer
   });
 }
 
-function detectLanguage(segments: Segment[]) {
-  const sample = segments
-    .map((s) => s.source)
-    .join('\n')
-    .slice(0, 6000);
-  const code = detect(sample);
+function detectLanguage(text: string) {
+  const code = detect(text.slice(0, 6000));
   return isSupported(code) ? code : 'en';
+}
+
+// Rozpoznaný jazyk = cílový: nejspíš vybraný už přeložený soubor, překlad by jen zabral čas.
+function rejectSameLanguage(job: Job, detected: string) {
+  if (detected === job.targetLang) throw new Error(t('pipeline.alreadyTarget', { lang: languageName(detected) }));
 }
 
 export async function runJob(ctx: JobContext): Promise<Measured> {
@@ -648,7 +652,10 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
     if (!segments.length) throw new Error(t('pipeline.noText'));
     if (ctx.ocrCount) measured.ocrPerPage = (Date.now() - tick) / 1000 / ctx.ocrCount;
     job.chars = segments.reduce((n, s) => n + s.source.length, 0);
-    if (job.sourceLang === 'auto') job.sourceLang = detectLanguage(segments);
+    if (job.sourceLang === 'auto') {
+      job.sourceLang = detectLanguage(segments.map((s) => s.source).join('\n'));
+      rejectSameLanguage(job, job.sourceLang);
+    }
     if (job.pickParagraphs) {
       await store.saveSegments(job.id, segments);
       return { ...measured, paused: true };
