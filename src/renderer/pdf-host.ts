@@ -1,6 +1,6 @@
 // Skryté okno: pdf.js potřebuje canvas a web worker, které hlavní proces nemá.
 import { getDocument, GlobalWorkerOptions, OPS, type PDFDocumentLoadingTask, type PDFDocumentProxy } from 'pdfjs-dist';
-import { PDFJS_OPTIONS, type LinkArea, type PdfBridge, type PdfTask, type TextItem } from '../shared/pdf';
+import { PDFJS_OPTIONS, unshiftText, type LinkArea, type PdfBridge, type PdfTask, type TextItem } from '../shared/pdf';
 
 declare global {
   interface Window {
@@ -39,12 +39,18 @@ async function run(task: PdfTask): Promise<unknown> {
       const [vx, , , vy] = page.view;
       const items: TextItem[] = [];
       const fonts: string[] = [];
+      let turned = 0;
       for (const item of content.items) {
         if (!('str' in item) || !item.str) continue;
-        const [, , , d, e, f] = item.transform as number[];
+        const [, b, c, d, e, f] = item.transform as number[];
+        // Otočený text (osy grafů, tabulka na šířku) zůstane v PDF původní, nepřekládá se.
+        if (Math.abs(b) > 0.01 || Math.abs(c) > 0.01) {
+          turned += item.str.trim().length;
+          continue;
+        }
         const h = item.height || Math.abs(d);
         // pdf.js má počátek vlevo dole a f je účaří; převod na horní okraj řádku vůči výřezu stránky.
-        items.push({ str: item.str, x: e - vx, y: vy - f - h, w: item.width, h, serif: content.styles[item.fontName]?.fontFamily === 'serif' });
+        items.push({ str: unshiftText(item.str), x: e - vx, y: vy - f - h, w: item.width, h, serif: content.styles[item.fontName]?.fontFamily === 'serif' });
         fonts.push(item.fontName);
       }
       let invisible = false;
@@ -73,7 +79,7 @@ async function run(task: PdfTask): Promise<unknown> {
         links.push({ ...(a.url && { url: a.url as string }), x: Math.min(x0, x1) - vx, y: vy - Math.max(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) });
       }
       page.cleanup();
-      return { items, width: viewport.width, height: viewport.height, view: [...page.view], rotate: page.rotate, invisible, links };
+      return { items, turned, width: viewport.width, height: viewport.height, view: [...page.view], rotate: page.rotate, invisible, links };
     }
     case 'render': {
       const page = await doc(task.docId).getPage(task.page);

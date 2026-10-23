@@ -53,6 +53,8 @@ export interface Segment {
   centered?: boolean;
   /** Jen pro přeložené PDF (zvýrazněný citát opakující větu z článku); jinde se nezobrazuje. */
   layoutOnly?: boolean;
+  /** Text uvnitř grafu nebo schématu: nepřekládá se, v PDF zůstane původní, ve Wordu není. */
+  figure?: boolean;
   links?: SegmentLink[];
 }
 

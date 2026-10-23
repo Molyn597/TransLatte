@@ -257,13 +257,13 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
     for (const p of selected) texts.push(await pageText(docId, p));
     ctx.pages = new Map(texts.map((text, i) => [selected[i], geometry(text)]));
     const content = removePageFurniture(texts);
-    const layouts = texts.map(({ items, width, links }, i) => ({
+    const layouts = texts.map(({ items, turned, width, links }, i) => ({
       page: selected[i],
       items: content[i],
       width,
       links: linkAnchors(content[i], links, selected[i]),
       blocks: layoutToBlocks(content[i], width, selected[i]),
-      scanned: items.reduce((n, it) => n + it.str.trim().length, 0) < SCAN_TEXT_CHARS,
+      scanned: items.reduce((n, it) => n + it.str.trim().length, turned ?? 0) < SCAN_TEXT_CHARS,
     }));
     // Rychlý režim čte digitální stránky z textové vrstvy, OCR jen u skenů.
     const ocrPages = layouts.filter((l) => job.mode !== 'fast' || l.scanned).map((l) => l.page);
@@ -443,7 +443,10 @@ const joinUnits = (units: Unit[], seg: Segment, pick: (u: Unit) => string) =>
 async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
   // Pořadí den/měsíc platí pro celý dokument („25/12/2014“ jinde rozhodne i „03/10/2014“).
   const order = documentOrder(segments.map((s) => s.source));
-  const units = toUnits(ctx, segments, order);
+  const all = toUnits(ctx, segments, order);
+  // Čísla a značky bez písmen ani text v grafech a schématech se nepřekládají; v PDF zůstanou původní.
+  for (const u of all) if (u.seg.figure || !/\p{L}/u.test(u.prepared)) u.translation = u.prepared;
+  const units = all.filter((u) => u.translation === undefined);
   const total = segments.reduce((n, s) => n + s.source.length, 0);
   let done = 0;
   const report = (chars: number) => {
@@ -481,7 +484,7 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
   ];
   await eachParallel(tasks, PARALLEL, (task) => task());
   for (const seg of segments) {
-    if (seg.kind !== 'table') seg.translation = stripAddedPeriod(seg.source, joinUnits(units, seg, (u) => u.translation ?? ''));
+    if (seg.kind !== 'table') seg.translation = stripAddedPeriod(seg.source, joinUnits(all, seg, (u) => u.translation ?? ''));
   }
 }
 

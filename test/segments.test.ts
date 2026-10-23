@@ -163,6 +163,13 @@ describe('normalizeMarkdownTable', () => {
   it('odmítne odpověď, která není tabulka', () => {
     expect(normalizeMarkdownTable('Sorry, I cannot read this.')).toBeNull();
   });
+
+  it('odstraní zbytky oddělovače z jiných řádků než druhého (skutečný výstup modelu)', () => {
+    const out = '| Technical area | Cumulative number | Rank | Share | Accumulated share | | :--- | :--- | :--- | :--- | :--- |\n| :--- | :--- | :--- | :--- | :--- |\n| Optics | 109326 | 1 | 30.4% | 30.4% |';
+    expect(normalizeMarkdownTable(out)).toBe(
+      '| Technical area | Cumulative number | Rank | Share | Accumulated share |\n| --- | --- | --- | --- | --- |\n| Optics | 109326 | 1 | 30.4% | 30.4% |',
+    );
+  });
 });
 
 describe('záhlaví, zápatí a konce stránek', () => {
@@ -486,5 +493,106 @@ describe('časopis ve dvou sloupcích (podle R&D Management 2019)', () => {
     // Tabulka s textovou vrstvou hned pod popiskem se nepřidá.
     const withText = [...items, ...[584, 596, 608].map((y) => item('Optics 109326 1 30.4%', 84, y, 300))];
     expect(addUnreadableTables(layoutToBlocks(withText, 595, 4), withText, size).some((b) => b.kind === 'table')).toBe(false);
+  });
+
+  describe('tabulka s textovou vrstvou pod popiskem', () => {
+    const size = { width: 595, height: 842 };
+    const caption = [item('Table 2. Fujifilm’s total transformation process', 84, 550, 218, 9), item('First Stage (1977–2002)', 84, 566, 100, 9)];
+    const header = item('Second stage (2003–2015)', 378, 567, 98, 9);
+    const cells = (rows: number) =>
+      [0, 1, 2, 3, 4, 5].slice(0, rows).flatMap((i) => [item(`Business ${i}`, 84, 585 + i * 12, 60, 9), item(`Technical change ${i}`, 200, 585 + i * 12, 80, 9), item(`Exploration ${i}`, 378, 585 + i * 12, 70, 9)]);
+
+    it('slije bloky tabulky do jednoho a odřízne z popisku záhlaví', () => {
+      // Jako na str. 10: do popisku se nalepil první řádek záhlaví, druhá buňka záhlaví je zvlášť.
+      const block = (text: string, cover: [number, number, number, number][]): Block => {
+        const x = Math.min(...cover.map((c) => c[0]));
+        const y = Math.min(...cover.map((c) => c[1]));
+        const rect = { page: 10, x, y, w: Math.max(...cover.map((c) => c[0] + c[2])) - x, h: Math.max(...cover.map((c) => c[1] + c[3])) - y, chars: text.length, cover };
+        return { kind: 'paragraph', text, page: 10, fontSize: 9, rects: [rect] };
+      };
+      const rows = [0, 1, 2].map((i) => 585 + i * 12);
+      const blocks = [
+        block('Table 2. Fujifilm’s total transformation process First Stage (1977–2002)', [[84, 550, 218, 11], [84, 566, 100, 11]]),
+        block('Second stage (2003–2015)', [[378, 567, 98, 11]]),
+        block('Business strategy Technical change', rows.flatMap((y) => [[84, y, 60, 11], [200, y, 80, 11], [378, y, 70, 11]] as [number, number, number, number][])),
+      ];
+      const items = [...caption, header];
+      const out = addUnreadableTables(blocks, items, size);
+      expect(out.map((b) => b.kind)).toEqual(['paragraph', 'table']);
+      expect(out[0].text).toBe('Table 2. Fujifilm’s total transformation process');
+      expect(out[1]).toMatchObject({ kind: 'table', page: 10, needsRepair: true });
+      expect(out[1].text).toBe('First Stage (1977–2002) Second stage (2003–2015) Business strategy Technical change');
+      expect(out[1].rects).toHaveLength(1);
+      expect(out[1].rects![0].y).toBeCloseTo(566, 0);
+      expect(out[1].box![1]).toBeLessThan(Math.round((567 / 842) * 999));
+    });
+
+    it('běžný dvousloupcový text pod popiskem nechytí', () => {
+      const text = (x: number, y: number) => item('word '.repeat(40), x, y, 220);
+      const column = [0, 1, 2, 3].flatMap((i) => [text(60, 580 + i * 12), text(315, 580 + i * 12)]);
+      const items = [item('Table 2. Fujifilm’s total transformation process', 60, 550, 218, 9), ...column];
+      expect(addUnreadableTables(layoutToBlocks(items, 595, 10), items, size).some((b) => b.kind === 'table')).toBe(false);
+    });
+
+    it('zastaví se u souvislého odstavce pod tabulkou', () => {
+      const para = [0, 1, 2].map((i) => item('Ordinary running text of the article continues here. '.repeat(3), 84, 700 + i * 12, 440, 9));
+      const items = [...caption, header, ...cells(4), ...para];
+      const out = addUnreadableTables(layoutToBlocks(items, 595, 10), items, size);
+      expect(out.map((b) => b.kind)).toEqual(['paragraph', 'table', 'paragraph']);
+      expect(out[1].text).not.toMatch(/Ordinary/);
+    });
+  });
+});
+
+describe('štítky diagramů', () => {
+  const body = (y0: number) => [0, 1, 2, 3].map((i) => item(`Běžný odstavec textu číslo ${i} pokračuje dlouho a plyne dál bez přerušení věty.`, 40, y0 + i * 12, 480, 10));
+
+  it('štítky schématu se rozdělí na samostatné bloky s figure, odstavec zůstane bez figure', () => {
+    const items: TextItem[] = [
+      ...body(100),
+      item('President', 100, 200, 50, 7),
+      item('Laboratories', 300, 200, 60, 7),
+      item('Recording media', 100, 260, 80, 7),
+      item('division', 100, 268, 40, 7),
+    ];
+    const blocks = layoutToBlocks(items, 600, 1);
+    const labels = blocks.filter((b) => b.figure);
+    expect(labels.map((b) => b.text)).toEqual(['President', 'Laboratories', 'Recording media division']);
+    expect(labels.every((b) => b.layoutOnly)).toBe(true);
+    expect(blocks.find((b) => b.text.startsWith('Běžný odstavec'))?.figure).toBeUndefined();
+  });
+
+  it('legenda pod sebou dá tři samostatné štítky', () => {
+    const items: TextItem[] = [
+      ...body(100),
+      item('Semicon', 100, 200, 40, 6),
+      item('Measurement', 100, 212, 55, 6),
+      item('Medical tech', 100, 224, 60, 6),
+    ];
+    const blocks = layoutToBlocks(items, 600, 1);
+    const labels = blocks.filter((b) => b.figure);
+    expect(labels.map((b) => b.text)).toEqual(['Semicon', 'Measurement', 'Medical tech']);
+  });
+
+  it('popisek obrázku menším písmem se nerozdělí a figure nemá', () => {
+    const items: TextItem[] = [
+      ...body(100),
+      item('Figure 5. R&D organizational systems in the photograph era.', 40, 170, 380, 8),
+    ];
+    const blocks = layoutToBlocks(items, 600, 1);
+    const caption = blocks.find((b) => b.text.startsWith('Figure 5.'));
+    expect(caption).toBeDefined();
+    expect(caption?.figure).toBeUndefined();
+  });
+
+  it('poznámka pod čarou menším písmem jako souvislý text se nerozdělí', () => {
+    const items: TextItem[] = [
+      ...body(100),
+      item('Poznámka: dlouhá věta pod čarou pokračuje přes celou šířku sloupce a nemá žádné krátké úseky rozházené po řádku, jen souvislý text.', 40, 300, 480, 8),
+      item('Druhý řádek poznámky je také dlouhý a plyne ve stejném souvislém odstavci bez jakýchkoli mezer do stran a bez štítků.', 40, 312, 480, 8),
+    ];
+    const blocks = layoutToBlocks(items, 600, 1);
+    expect(blocks.some((b) => b.figure)).toBe(false);
+    expect(blocks.find((b) => b.text.startsWith('Poznámka'))?.text).toContain('Druhý řádek poznámky');
   });
 });

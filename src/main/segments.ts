@@ -14,6 +14,8 @@ export interface Block {
   centered?: boolean;
   /** Jen pro přeložené PDF, ve Srovnání ani v exportu se nezobrazí. */
   layoutOnly?: boolean;
+  /** Text uvnitř grafu nebo schématu: nepřekládá se, v PDF zůstane původní. */
+  figure?: boolean;
   /** Tabulka z OCR přišla bez buněk (LM Studio zahazuje tokeny <tr>/<td> DeepSeek-OCR). */
   needsRepair?: boolean;
   warning?: string;
@@ -164,7 +166,20 @@ export function normalizeMarkdownTable(text: string): string | null {
   const table = rows.filter((r) => r.startsWith('|')).map((r) => (r.endsWith('|') ? r : `${r} |`));
   const separator = table.findIndex((r) => /^\|[\s|:-]+\|$/.test(r));
   if (table.length < 3 || separator !== 1) return null;
-  return table.join('\n');
+  // Model vkládá buňky oddělovače (`:---`) i do záhlaví a datových řádků; zůstane jen druhý řádek.
+  const cells = (r: string) => r.slice(1, -1).split('|').map((c) => c.trim());
+  const isRule = (c: string) => /^:?-{3,}:?$/.test(c);
+  const withoutRules = (r: string) => {
+    const c = cells(r).filter((x) => !isRule(x));
+    while (c.length > 1 && !c[c.length - 1]) c.pop();
+    return c;
+  };
+  const clean = table.map((r, i) => (i === 1 ? cells(r) : withoutRules(r)));
+  const columns = Math.max(...clean.filter((_, i) => i !== 1).map((c) => c.length));
+  if (!columns) return null;
+  const fit = (c: string[]) => Array.from({ length: columns }, (_, i) => c[i] ?? '');
+  const row = (c: string[]) => `| ${fit(c).join(' | ')} |`;
+  return clean.map((c, i) => (i === 1 ? `| ${Array(columns).fill('---').join(' | ')} |` : row(c))).join('\n');
 }
 
 interface Line {
@@ -174,6 +189,8 @@ interface Line {
   x1: number;
   /** Úseky řádku oddělené velkou mezerou (sloupce tabulky), aby překrytí nesmazalo čáry mezi nimi. */
   spans: [number, number][];
+  /** Text jednotlivých úseků (popisky v diagramu). */
+  pieces: { text: string; x0: number; x1: number }[];
   text: string;
   serif: boolean;
   bold: boolean;
@@ -223,8 +240,15 @@ function toLines(items: TextItem[]): Line[] {
       if (dropCap) parts = [{ ...parts[1], str: dropCap.str.trim() + parts[1].str.trimStart(), x: dropCap.x, w: parts[1].x + parts[1].w - dropCap.x }, ...parts.slice(2)];
       let text = '';
       let end = -Infinity;
+      const pieces: Line['pieces'] = [];
       for (const p of parts) {
         const gap = p.x - end;
+        // Stejná hranice úseku jako v rowSpans.
+        if (!pieces.length || gap >= p.h) pieces.push({ text: '', x0: p.x, x1: p.x + p.w });
+        const piece = pieces[pieces.length - 1];
+        if (piece.text && !piece.text.endsWith(' ') && !p.str.startsWith(' ') && gap > p.h * 0.1) piece.text += ' ';
+        piece.text += p.str;
+        piece.x1 = Math.max(piece.x1, p.x + p.w);
         if (text && !text.endsWith(' ') && !p.str.startsWith(' ') && gap > p.h * 0.1) text += ' ';
         text += p.str;
         end = Math.max(end, p.x + p.w);
@@ -235,6 +259,7 @@ function toLines(items: TextItem[]): Line[] {
         x0: Math.min(...parts.map((p) => p.x)),
         x1: Math.max(...parts.map((p) => p.x + p.w)),
         spans: rowSpans(parts),
+        pieces: pieces.map((pc) => ({ ...pc, text: pc.text.replace(/\s+/g, ' ').trim() })).filter((pc) => pc.text),
         text: text.replace(/\s+/g, ' ').trim(),
         serif: majority(parts, (p) => p.serif),
         bold: majority(parts, (p) => p.bold),
@@ -251,6 +276,8 @@ function median(values: number[]) {
 
 interface Metrics {
   bodyHeight: number;
+  /** Písmo souvislého textu (s nejvíc znaky); na stránce s grafem je krátkých štítků víc než řádků textu. */
+  textHeight: number;
   lineGap: number;
   pageWidth: number;
 }
@@ -258,11 +285,15 @@ interface Metrics {
 function metrics(lines: Line[], pageWidth: number): Metrics {
   const bodyHeight = median(lines.map((l) => l.h));
   const gaps = lines.slice(1).map((l, i) => l.y - lines[i].y);
-  return { bodyHeight, lineGap: median(gaps.filter((g) => g > 0)) || bodyHeight * 1.2, pageWidth };
+  // Písmo s nejvíc znaky na stránce.
+  const chars = new Map<number, number>();
+  for (const l of lines) chars.set(Math.round(l.h * 2) / 2, (chars.get(Math.round(l.h * 2) / 2) ?? 0) + l.text.length);
+  const textHeight = [...chars].sort((a, b) => b[1] - a[1])[0]?.[0] ?? bodyHeight;
+  return { bodyHeight, textHeight, lineGap: median(gaps.filter((g) => g > 0)) || bodyHeight * 1.2, pageWidth };
 }
 
 // Metriky se berou z celé stránky: skupina nad sloupci (název článku) by jinak sama sebe brala za běžný text.
-function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap, pageWidth }: Metrics): Block[] {
+function linesToBlocks(lines: Line[], page: number, { bodyHeight, textHeight, lineGap, pageWidth }: Metrics): Block[] {
   if (!lines.length) return [];
   const blocks: Block[] = [];
   const members = new Map<Block, Line[]>();
@@ -304,7 +335,51 @@ function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap, pageW
     if (block.kind === 'heading' && (members.get(block)!.length > 3 || block.text.length > 200)) block.kind = 'paragraph';
     Object.assign(block, lineGeometry(members.get(block)!, page, block, pageWidth));
   }
-  return blocks;
+  return blocks.flatMap((b) => (isFigureText(members.get(b)!, b, textHeight) ? figureLabels(members.get(b)!, page, pageWidth) : [b]));
+}
+
+const CAPTION = /^(figure|fig\.|obr(ázek|\.)|table|tab\.|tabulka|source|zdroj|note|pozn)/i;
+
+/**
+ * Text uvnitř diagramu nebo grafu: menší písmo než běžný text a krátké úseky rozházené po řádcích
+ * (rámečky schématu, osy, legenda). Popisek obrázku pod ním je souvislá věta, ten sem nepatří.
+ */
+function isFigureText(lines: Line[], block: Block, textHeight: number) {
+  if (block.kind === 'table' || CAPTION.test(block.text)) return false;
+  const pieces = lines.flatMap((l) => l.pieces);
+  if (pieces.length < 2) return false;
+  const average = pieces.reduce((n, p) => n + p.text.length, 0) / pieces.length;
+  const small = lines.filter((l) => l.h < textHeight * 0.85).reduce((n, l) => n + l.text.length, 0);
+  // Krátké úseky vedle sebe s aspoň částí drobného písma: rámeček schématu může mít i větší nadpis.
+  // Tabulka mívá písmo jednotné, ta sem nepatří.
+  if (small > 0 && pieces.length > lines.length * 1.5 && average < 30) return true;
+  // Jinak rozhoduje většina znaků menším písmem.
+  return small >= block.text.length * 0.6 && (average < 30 || pieces.length > lines.length * 1.5);
+}
+
+/** Štítky diagramu: každý úsek zvlášť, úseky těsně pod sebou ve stejném rámečku dohromady. */
+function figureLabels(lines: Line[], page: number, pageWidth: number): Block[] {
+  const labels: Line[][] = [];
+  for (const line of [...lines].sort((a, b) => a.y - b.y)) {
+    for (const piece of line.pieces) {
+      const own: Line = { ...line, x0: piece.x0, x1: piece.x1, spans: [[piece.x0, piece.x1]], pieces: [piece], text: piece.text };
+      const above = labels.find((label) => {
+        const last = label[label.length - 1];
+        const overlap = Math.min(last.x1, own.x1) - Math.max(last.x0, own.x0);
+        // Pokračování popisku začíná malým písmenem nebo navazuje na „&“, „-“, „,“; položky legendy pod sebou ne.
+        const continues = /^\p{Ll}/u.test(own.text) || /[&,\-–]$|\b(and|of|for|a|pro)$/u.test(last.text);
+        return continues && overlap > Math.min(last.x1 - last.x0, own.x1 - own.x0) * 0.5 && own.y - (last.y + last.h) < last.h * 0.8 && own.y > last.y && Math.abs(last.h - own.h) < 1;
+      });
+      if (above) above.push(own);
+      else labels.push([own]);
+    }
+  }
+  return labels.map((label) => {
+    const text = label.reduce((t, l) => (!t ? l.text : /\p{L}-$/u.test(t) && /^\p{Ll}/u.test(l.text) ? t.slice(0, -1) + l.text : `${t} ${l.text}`), '');
+    // Delší souvislý text (rámeček s odstavcem, poznámka) není štítek, překládá se normálně.
+    const block: Block = text.length >= 40 ? { kind: 'paragraph', text, page } : { kind: 'paragraph', text, page, layoutOnly: true, figure: true };
+    return Object.assign(block, lineGeometry(label, page, block, pageWidth));
+  });
 }
 
 /** Obálka řádků bloku; dolní okraj včetně dotažnic (účaří je na y + h). */
@@ -353,15 +428,106 @@ export function textLayerGeometry(blocks: Block[], items: TextItem[], pageWidth:
 
 const TABLE_CAPTION = /^(table|tab\.|tabulka|tabelle)\s*\d+[.:]/i;
 
+const rowTolerance = (h: number) => h * 0.5;
+
+/** Řádky bloku podle ploch řádků: výška a počet úseků na řádek. */
+function coverRows(block: Block) {
+  const rows: { y: number; h: number; spans: number }[] = [];
+  for (const [, y, , h] of block.rects?.[0]?.cover ?? []) {
+    const row = rows.find((r) => Math.abs(r.y - y) < rowTolerance(Math.max(r.h, h)));
+    if (row) row.spans++;
+    else rows.push({ y, h, spans: 1 });
+  }
+  return rows;
+}
+
+/**
+ * Tabulka s textovou vrstvou pod popiskem „Table N.“: bloky pod popiskem, jejichž řádky mají víc úseků
+ * (sloupce), nebo které leží vedle sebe ve stejné výšce, se slijí do jednoho bloku tabulky.
+ * Souvislý text, nadpis nebo další popisek je zastaví. Z popisku se odřízne záhlaví nalepené
+ * na jeho další řádky, ale jen když sdílí řádek s tabulkou.
+ */
+function tablesWithText(blocks: Block[], real: TextItem[], size: { width: number; height: number }) {
+  const consumed = new Set<Block>();
+  const captions = new Map<Block, Block>();
+  const tables = new Map<Block, Block>();
+  for (const b of blocks) {
+    const r = b.rects?.[0];
+    if (b.kind === 'table' || !r || b.rects!.length > 1 || !TABLE_CAPTION.test(b.text)) continue;
+    const inside = real.filter((i) => i.x + i.w / 2 >= r.x - 3 && i.x + i.w / 2 <= r.x + r.w + 3 && i.y + i.h / 2 >= r.y - 3 && i.y + i.h / 2 <= r.y + r.h + 3);
+    const lines = toLines(inside);
+    const flat = (t: string) => t.replace(/\s+/g, '');
+    const splittable = lines.length > 1 && flat(lines.map((l) => l.text).join('')) === flat(b.text);
+    const tail = splittable ? lines.slice(1) : [];
+
+    const below = blocks
+      .filter((c) => c !== b && !consumed.has(c) && c.page === b.page && c.kind !== 'table' && c.rects?.length === 1 && c.rects[0].y > r.y + lines[0]?.h * 0.5)
+      .sort((x, y) => x.rects![0].y - y.rects![0].y || x.rects![0].x - y.rects![0].x);
+    const matesRow = (c: Block) => {
+      const row = coverRows(c)[0];
+      if (!row) return false;
+      const near = (y: number) => Math.abs(y - row.y) < rowTolerance(row.h);
+      return tail.some((l) => near(l.y)) || below.some((o) => o !== c && coverRows(o).some((x) => near(x.y)));
+    };
+    const parts: Block[] = [];
+    for (const c of below) {
+      const rows = coverRows(c);
+      // Buňka přes víc řádků (zalomený text v buňce) leží vedle jiné buňky ve stejné výšce.
+      // Sloupce článku vedle sebe mají dlouhé řádky, buňky krátké.
+      const cell = rows.length === 1 || c.text.length / rows.length < 40;
+      const tabular = (cell && matesRow(c)) || (rows.length > 1 && rows.filter((x) => x.spans > 1).length * 2 >= rows.length);
+      if (c.kind === 'heading' || CAPTION.test(c.text) || !tabular) break;
+      parts.push(c);
+    }
+    // Aspoň jeden víceřádkový blok, nebo hodně buněk vedle sebe (tabulka rozdělená na buňky).
+    if (!parts.some((c) => coverRows(c).length > 1) && parts.length < 6) continue;
+
+    // Řádky popisku od prvního, který sdílí výšku s tabulkou, patří do záhlaví.
+    const tableRows = parts.flatMap((c) => coverRows(c));
+    const k = tail.findIndex((l) => tableRows.some((x) => Math.abs(x.y - l.y) < rowTolerance(Math.max(x.h, l.h)))) + 1;
+    const moved = k ? lines.slice(k) : [];
+    const head = k ? lines.slice(0, k) : lines;
+    if (k) {
+      const caption: Block = { ...b, text: head.map((l) => l.text).join(' ') };
+      captions.set(b, Object.assign(caption, lineGeometry(head, b.page!, caption, size.width)));
+    }
+
+    const pieces = [
+      ...moved.map((l) => ({ y: l.y, x: l.x0, text: l.text, rect: { x: l.x0, y: l.y, w: l.x1 - l.x0, h: l.h * 1.2 }, cover: l.spans.map(([a, z]) => [round(a), round(l.y), round(z - a), round(l.h * 1.2)] as [number, number, number, number]), chars: l.text.length, block: undefined as Block | undefined })),
+      ...parts.map((c) => ({ y: c.rects![0].y, x: c.rects![0].x, text: c.text, rect: c.rects![0], cover: c.rects![0].cover ?? [], chars: c.text.length, block: c as Block | undefined })),
+    ].sort((p, q) => (Math.abs(p.y - q.y) < 3 ? p.x - q.x : p.y - q.y));
+    const text = pieces.map((p) => p.text).join(' ');
+    const x0 = Math.min(...pieces.map((p) => p.rect.x));
+    const y0 = Math.min(...pieces.map((p) => p.rect.y));
+    const x1 = Math.max(...pieces.map((p) => p.rect.x + p.rect.w));
+    const y1 = Math.max(...pieces.map((p) => p.rect.y + p.rect.h));
+    const style = parts.reduce((a, c) => (c.text.length > a.text.length ? c : a));
+    const pad = 3;
+    const box = [Math.max(0, x0 - pad) / size.width, Math.max(0, y0 - pad) / size.height, Math.min(size.width, x1 + pad) / size.width, Math.min(size.height, y1 + pad) / size.height].map((v) => Math.round(v * 999)) as Block['box'];
+    const rect: Rect = { page: r.page, x: round(x0), y: round(y0), w: round(x1 - x0), h: round(y1 - y0), chars: text.length, cover: pieces.flatMap((p) => p.cover) };
+    tables.set(b, { kind: 'table', text, page: b.page, box, needsRepair: true, rects: [rect], fontSize: style.fontSize, serif: style.serif, bold: style.bold });
+    parts.forEach((c) => consumed.add(c));
+  }
+  return { consumed, captions, tables };
+}
+
 /**
  * Tabulka nakreslená křivkami nebo vložená jako obrázek nemá textovou vrstvu, pod popiskem
  * „Table N.“ pak zůstane prázdné místo. Z něj se udělá tabulka k přečtení vision modelem z výřezu stránky.
  */
 export function addUnreadableTables(blocks: Block[], items: TextItem[], size: { width: number; height: number }): Block[] {
   const real = items.filter((i) => i.str.trim());
+  const found = tablesWithText(blocks, real, size);
   const out: Block[] = [];
-  for (const b of blocks) {
+  for (const original of blocks) {
+    if (found.consumed.has(original)) continue;
+    const b = found.captions.get(original) ?? original;
     out.push(b);
+    const table = found.tables.get(original);
+    if (table) {
+      out.push(table);
+      continue;
+    }
     const r = b.rects?.[0];
     if (b.kind === 'table' || !r || b.rects!.length > 1 || !TABLE_CAPTION.test(b.text)) continue;
     const top = r.y + r.h;
@@ -667,6 +833,7 @@ export function blocksToSegments(blocks: Block[]): Segment[] {
       ...(b.warning && { warning: b.warning }),
       ...(b.rects?.length && { rects: b.rects, fontSize: b.fontSize, serif: b.serif, bold: b.bold, centered: b.centered }),
       ...(b.layoutOnly && { layoutOnly: true }),
+      ...(b.figure && { figure: true }),
       ...(b.links?.length && { links: b.links }),
     }));
 }

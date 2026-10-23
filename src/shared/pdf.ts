@@ -34,6 +34,8 @@ export interface PdfOpenResult {
 
 export interface PdfTextResult {
   items: TextItem[];
+  /** Znaků otočeného textu, který v `items` není (zůstane v PDF původní). */
+  turned: number;
   width: number;
   height: number;
   /** pdf.js `view` (výřez cropBox v uživatelských souřadnicích PDF) a otočení stránky. */
@@ -61,3 +63,16 @@ export const PDFJS_OPTIONS = {
   iccUrl: './pdfjs/iccs/',
   isEvalSupported: false,
 };
+
+// Písma z japonského MS Office mívají ToUnicode posunuté o pevnou hodnotu do bloku CJK rozšíření A
+// („㻝㻢㻜㻜“ je „1600“, „㻌“ mezera). Převádí se jen text, který je takhle posunutý skoro celý.
+const SHIFT = 0x3eac;
+const shifted = (code: number) => code >= 0x20 + SHIFT && code <= 0x7e + SHIFT;
+
+export function unshiftText(str: string): string {
+  const chars = [...str].filter((c) => c.trim());
+  if (!chars.length) return str;
+  const count = chars.filter((c) => shifted(c.codePointAt(0)!)).length;
+  if (count < chars.length * 0.8) return str;
+  return [...str].map((c) => (shifted(c.codePointAt(0)!) ? String.fromCharCode(c.codePointAt(0)! - SHIFT) : c)).join('');
+}

@@ -645,8 +645,9 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     const page = doc.getPage(number - 1);
     isolate(doc, page);
     // Sloupec: obdélníky na stejné stránce začínající na stejném x.
-    for (const p of placements) {
-      p.right = Math.max(p.right, ...placements.filter((o) => Math.abs(o.rect.x - p.rect.x) < 6).map((o) => o.rect.x + o.rect.w));
+    // Štítek diagramu zůstane ve svém rámečku.
+    for (const p of placements.filter((o) => !o.segment.figure)) {
+      p.right = Math.max(p.right, ...placements.filter((o) => !o.segment.figure && Math.abs(o.rect.x - p.rect.x) < 6).map((o) => o.rect.x + o.rect.w));
     }
     // Nejdřív všechny plochy, pak text: plocha sousedního bloku nesmí překrýt už vepsaný překlad.
     for (const placement of placements) {
@@ -841,7 +842,7 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
 
 type Piece = { page: number; x: number; y: number; width: number; height: number };
 
-const sameText = (a: string, b: string) => clean(a).replace(/\s+/g, ' ').trim() === clean(b).replace(/\s+/g, ' ').trim();
+const sameText = (a: string, b: string) => clean(a).replace(/\s+/g, '') === clean(b).replace(/\s+/g, '');
 
 const fontKey = (s: Segment): keyof typeof FONT_FILES =>
   s.bold || s.kind === 'heading' ? (s.serif ? 'serifBold' : 'sansBold') : s.serif ? 'serif' : 'sans';
@@ -864,7 +865,7 @@ const rows = (cover: Rect['cover']) => new Set((cover ?? []).map(([, y]) => Math
  * Samostatný krátký blok (záhlaví, popisek) se sází po staru do svého místa.
  */
 export function pageChains(placements: Placement[]): ChainFrame[][] {
-  const candidates = placements.filter((p) => p.text && p.segment.kind !== 'table' && p.rect.cover?.length && !p.segment.centered);
+  const candidates = placements.filter((p) => p.text && p.segment.kind !== 'table' && !p.segment.figure && p.rect.cover?.length && !p.segment.centered);
   const columns: Placement[][] = [];
   for (const p of candidates) {
     const column = columns.find((c) => Math.abs(c[0].rect.x - p.rect.x) < 6);
