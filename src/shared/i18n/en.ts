@@ -115,6 +115,8 @@ export const en: Record<keyof typeof cs, Message> = {
   'detail.tab.info': 'Information',
   'detail.pages': { one: '{count} p.', other: '{count} pp.' },
   'detail.retry': 'Translate again',
+  'detail.relayout': 'Rebuild PDF',
+  'detail.relayoutDone': 'The PDF has been rebuilt.',
   'detail.retryQueued': 'Added to the queue: {name} ({mode})',
   'detail.openPdf': 'Open PDF',
   'detail.openWord': 'Open Word',

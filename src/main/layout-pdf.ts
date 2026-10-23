@@ -3,6 +3,8 @@ import path from 'node:path';
 import fontkit from '@pdf-lib/fontkit';
 import { PDFArray, PDFDict, PDFDocument, PDFName, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
 import type { Rect, Segment, SegmentLink } from '../shared/types';
+import { ATTEMPTS, firstIndent, flow, isJustified, measuredPitch, type FlowBlock, type Frame, type PlacedLine } from './flow';
+import { hyphenParts } from './hyphenate';
 import { findAnchors, type AnchorRange } from './quality';
 
 /** Výřez a otočení stránky z pdf.js; rozměry viewportu při scale 1. */
@@ -39,6 +41,8 @@ const INK_PIXELS = 2;
 const BLANK_TOLERANCE = 8;
 // Nejvýš tolik bodů pod odstavcem smí překlad využít, než se začne zmenšovat písmo.
 const MAX_ROOM = 40;
+// Pás vlevo od bloku, kde se hledají odrážky kreslené jako grafika.
+const GUTTER = 18;
 const FONT_FILES = {
   sans: 'NotoSans-Regular.ttf',
   sansBold: 'NotoSans-Bold.ttf',
@@ -306,12 +310,12 @@ function firstInkRow(a: PageImage, b: PageImage, box: Box): number | null {
   return null;
 }
 
-/** Výška (v bodech) prázdného pásu pod obdélníkem: řádky pixelů stejné barvy jako pozadí, nejvýš MAX_ROOM. */
-export function blankBelow(image: PageImage, rect: Box, color: Color, px: number): number {
+/** Výška (v bodech) prázdného pásu pod obdélníkem: řádky pixelů stejné barvy jako pozadí, nejvýš `max`. */
+export function blankBelow(image: PageImage, rect: Box, color: Color, px: number, max = MAX_ROOM): number {
   const x0 = Math.max(0, Math.floor(rect.x * px));
   const x1 = Math.min(image.width, Math.ceil((rect.x + rect.w) * px));
   const start = Math.ceil((rect.y + rect.h + PAD) * px);
-  const end = Math.min(image.height, start + Math.ceil(MAX_ROOM * px));
+  const end = Math.min(image.height, start + Math.ceil(max * px));
   const [r, g, b] = color.map((v) => v * 255);
   let y = start;
   for (; y < end; y++) {
@@ -363,6 +367,87 @@ export function linkStyle(image: PageImage, box: Box): LinkStyle {
   return { ...(colorful && { color }), underline };
 }
 
+/** V obdélníku (pixely obrázku) je něco jiného než pozadí. */
+export function hasInk(image: PageImage, box: Box, color: Color): boolean {
+  const [r, g, b] = color.map((v) => v * 255);
+  let different = 0;
+  for (let y = Math.max(0, Math.floor(box.y)); y < Math.min(image.height, Math.ceil(box.y + box.h)); y++) {
+    for (let x = Math.max(0, Math.floor(box.x)); x < Math.min(image.width, Math.ceil(box.x + box.w)); x++) {
+      const i = (y * image.width + x) * 4;
+      if (Math.abs(image.data[i] - r) + Math.abs(image.data[i + 1] - g) + Math.abs(image.data[i + 2] - b) > 60 && ++different >= INK_PIXELS * 4) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Grafika vlevo od řádků bloku (odrážky a čísla kreslené jako obrázek): pás před začátkem každého řádku.
+ * Podtržení odkazů leží pod textem, do pásu nezasahuje.
+ */
+function gutterInk(bare: PageImage, rect: Rect, color: Color, px: number): boolean {
+  const starts = new Map<number, [number, number]>();
+  for (const [x, y, , h] of rect.cover ?? [[rect.x, rect.y, rect.w, rect.h]]) {
+    const row = starts.get(Math.round(y));
+    if (!row || x < row[0]) starts.set(Math.round(y), [x, h]);
+  }
+  return [...starts].some(([y, [x, h]]) => {
+    const left = rect.x - GUTTER;
+    return x - PAD - 1 > left && hasInk(bare, { x: left * px, y: y * px, w: (x - PAD - 1 - left) * px, h: h * px }, color);
+  });
+}
+
+/**
+ * Plochy původního textu k přemalování; u odkazů i jejich klikací plocha, aby nezůstalo podtržení
+ * (překlad je jinde než původní text odkazu).
+ */
+function coverBoxes({ rect, segment }: Placement): [number, number, number, number][] {
+  const boxes: [number, number, number, number][] = [...(rect.cover ?? [[rect.x, rect.y, rect.w, rect.h]])];
+  if (segment.kind === 'table') return boxes;
+  for (const link of segment.links ?? []) {
+    for (const r of link.rects) {
+      const inside = r.page === rect.page && r.y >= rect.y - PAD && r.y + r.h <= rect.y + rect.h + PAD * 3;
+      if (inside) boxes.push([r.x, r.y, r.w, r.h]);
+    }
+  }
+  return boxes;
+}
+
+/** Kopie stránky bez textu s přemalovanými plochami původního textu (grafika pod nimi, např. podtržení, zmizí i v PDF). */
+function paintCovers(image: PageImage, placements: Placement[], geometry: PageGeometry): PageImage {
+  const data = image.data.slice();
+  const px = image.width / geometry.width;
+  for (const placement of placements) {
+    const [r, g, b] = placement.color.map((v) => Math.round(v * 255));
+    for (const [x, y, w, h] of coverBoxes(placement)) {
+      for (let yy = Math.max(0, Math.floor((y - PAD) * px)); yy < Math.min(image.height, Math.ceil((y + h + PAD) * px)); yy++) {
+        for (let xx = Math.max(0, Math.floor((x - PAD) * px)); xx < Math.min(image.width, Math.ceil((x + w + PAD) * px)); xx++) {
+          const i = (yy * image.width + xx) * 4;
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
+        }
+      }
+    }
+  }
+  return { ...image, data };
+}
+
+/** Barva písma: medián sytější poloviny pixelů odlišných od pozadí (vyhlazené okraje písmo zesvětlují). */
+export function inkColor(image: PageImage, box: Box): Color | undefined {
+  const [br, bg, bb] = backgroundColor(image, box).map((v) => v * 255);
+  const ink: { rgb: number[]; distance: number }[] = [];
+  for (let y = Math.max(0, Math.floor(box.y)); y < Math.min(image.height, Math.ceil(box.y + box.h)); y++) {
+    for (let x = Math.max(0, Math.floor(box.x)); x < Math.min(image.width, Math.ceil(box.x + box.w)); x++) {
+      const i = (y * image.width + x) * 4;
+      const distance = Math.abs(image.data[i] - br) + Math.abs(image.data[i + 1] - bg) + Math.abs(image.data[i + 2] - bb);
+      if (distance >= 150) ink.push({ rgb: [image.data[i], image.data[i + 1], image.data[i + 2]], distance });
+    }
+  }
+  if (ink.length < 10) return undefined;
+  const solid = ink.sort((a, b) => b.distance - a.distance).slice(0, Math.ceil(ink.length / 2));
+  return [0, 1, 2].map((c) => median(solid.map((p) => p.rgb[c]))! / 255) as Color;
+}
+
 /** Pro každé slovo textu (dělení podle mezer jako ve wrapText) index odkazu u každého znaku. */
 export function wordMarks(text: string, ranges: (AnchorRange | null)[]): (number | undefined)[][] {
   return [...text.matchAll(/\S+/g)].map((m) =>
@@ -401,6 +486,8 @@ export interface LayoutOptions {
   /** Vykreslená stránka (s textem a bez něj) pro barvu pozadí a viditelnost textu. */
   pageImage(page: number, noText: boolean): Promise<PageImage>;
   text(segment: Segment): string;
+  /** Jazyk překladu (dělení slov). */
+  lang?: string;
 }
 
 export interface LayoutResult {
@@ -432,6 +519,12 @@ interface Placement {
   right: number;
   /** Prázdné místo (body) pod obdélníkem, které smí odstavec využít, než zmenší písmo. */
   room: number;
+  /** Vzdálenost k dalšímu obsahu pod obdélníkem (text, obrázek, čára). */
+  below: number;
+  /** Barva písma originálu. */
+  ink?: Color;
+  /** Vlevo od textu je grafika (odrážky, čísla kreslená jako obrázek): blok zůstane na svém místě. */
+  anchored: boolean;
   text: string;
   /** Pořadí prvního slova části v celém textu segmentu (index do `marks`). */
   firstWord: number;
@@ -492,11 +585,14 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
   const styles = new Map<SegmentLink, LinkStyle>();
 
   // Viditelnost a barva pozadí stránku po stránce (vykreslení se hned zahodí).
-  const shown = new Map<Rect, { rect: Rect; color: Color; ruled: boolean; room: number }>();
+  const shown = new Map<Rect, { rect: Rect; color: Color; ruled: boolean; room: number; below: number; ink?: Color; anchored: boolean }>();
+  // Stránky bez textu: kam překlad nesmí (obrázky, odrážky, čáry).
+  const graphics = new Map<number, PageImage>();
   for (const number of [...new Set(items.flatMap((i) => i.rects.map((r) => r.page)))].sort((a, b) => a - b)) {
     const geometry = pages.get(number)!;
     const full = await options.pageImage(number, false);
     const bare = geometry.invisible ? full : await options.pageImage(number, true);
+    if (!geometry.invisible) graphics.set(number, bare);
     const px = full.width / geometry.width;
     for (const link of items.flatMap((i) => i.segment.links ?? [])) {
       const r = link.rects.find((o) => o.page === number);
@@ -509,11 +605,15 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
       const table = items.some((i) => i.segment.kind === 'table' && i.rects.includes(rect));
       const color = backgroundColor(full, box);
       const flowing = items.some((i) => ['paragraph', 'list'].includes(i.segment.kind) && i.rects.includes(rect));
+      const first = visible.cover?.[0];
       shown.set(rect, {
         rect: visible,
         color,
         ruled: table && !rect.cover && hasRuledEdges(full, { x: rect.x * px, y: rect.y * px, w: rect.w * px, h: rect.h * px }),
         room: flowing ? blankBelow(full, visible, color, px) : 0,
+        below: table ? 0 : blankBelow(full, visible, color, px, geometry.height),
+        ink: first && !geometry.invisible ? inkColor(full, { x: first[0] * px, y: first[1] * px, w: first[2] * px, h: first[3] * px }) : undefined,
+        anchored: !table && !geometry.invisible && gutterInk(bare, visible, color, px),
       });
     }
   }
@@ -525,15 +625,17 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     const parts = segment.kind === 'table' ? [text, ...visible.slice(1).map(() => '')] : splitText(text, visible.map((r) => r.chars ?? r.w * r.h));
     let firstWord = 0;
     visible.forEach((original, i) => {
-      const { rect, color, ruled, room } = shown.get(original)!;
+      const { rect, color, ruled, room, below, ink, anchored } = shown.get(original)!;
       if (!byPage.has(rect.page)) byPage.set(rect.page, []);
-      byPage.get(rect.page)!.push({ segment, rect, color, ruled, right: rect.x + rect.w, room, text: parts[i], firstWord, marks });
+      byPage.get(rect.page)!.push({ segment, rect, color, ruled, right: rect.x + rect.w, room, below, ink, anchored, text: parts[i], firstWord, marks });
       firstWord += parts[i].split(/\s+/).filter(Boolean).length;
     });
   }
 
   // Nová místa odkazů v přeloženém textu (souřadnice PDF).
   const pieces = new Map<SegmentLink, { page: number; x: number; y: number; width: number; height: number }[]>();
+  const style = await documentStyle([...byPage.values()].flat(), (serif) => font(serif ? 'serif' : 'sans'));
+  const hyphenate = (word: string) => hyphenParts(word, options.lang ?? '');
 
   for (const [number, placements] of byPage) {
     const geometry = pages.get(number)!;
@@ -544,16 +646,86 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
       p.right = Math.max(p.right, ...placements.filter((o) => Math.abs(o.rect.x - p.rect.x) < 6).map((o) => o.rect.x + o.rect.w));
     }
     // Nejdřív všechny plochy, pak text: plocha sousedního bloku nesmí překrýt už vepsaný překlad.
-    for (const { rect, color } of placements) {
-      for (const [x, y, w, h] of rect.cover ?? [[rect.x, rect.y, rect.w, rect.h]]) {
+    for (const placement of placements) {
+      const { color } = placement;
+      for (const [x, y, w, h] of coverBoxes(placement)) {
         const r = toPdfRect({ x: x - PAD, y: y - PAD, w: w + PAD * 2, h: h + PAD * 2 }, geometry.view);
         page.drawRectangle({ ...r, color: rgb(...color), borderWidth: 0 });
       }
     }
     // Odhad velikosti písma z OCR kolísá blok od bloku; odstavce na stránce se drží kolem mediánu.
     const bodySize = median(placements.filter((p) => p.segment.kind === 'paragraph' && p.segment.fontSize).map((p) => p.segment.fontSize!));
-    for (const { segment, rect, color: background, ruled, right, room, text, firstWord, marks } of placements) {
-      if (!text) continue;
+    const textSize = (p: Placement) => {
+      const own = p.segment.fontSize ?? bodySize ?? 10;
+      // Velikost z textové vrstvy je přesná; ke středu se táhnou jen odhady z OCR.
+      return p.segment.kind === 'paragraph' && bodySize && !p.rect.cover ? Math.min(Math.max(own, bodySize * 0.9), bodySize * 1.1) : own;
+    };
+    const chains = pageChains(placements).map((frames) => ({ frames }));
+    const flowed = new Set(chains.flatMap((c) => c.frames.flatMap((f) => f.members)));
+    const prepared = await Promise.all(
+      chains.map(async (chain) => ({
+        chain,
+        blocks: await Promise.all(
+          chain.frames.flatMap((frame, k) =>
+            frame.members.map(async (p): Promise<FlowBlock> => {
+              const main = await font(fontKey(p.segment));
+              const own = textSize(p);
+              const cover = p.rect.cover ?? [];
+              const s = style.get(!!p.segment.serif);
+              return {
+                text: p.text,
+                frame: k,
+                x: p.rect.x,
+                w: frame.x + frame.w - p.rect.x,
+                top: p.rect.y,
+                bottom: p.rect.y + p.rect.h,
+                size: own * (s?.width ?? 1),
+                pitch: measuredPitch(cover) ?? own * (p.segment.kind === 'heading' ? LINE : (s?.pitch ?? LINE)),
+                indent: p.firstWord === 0 ? firstIndent(cover) : 0,
+                justify: p.segment.kind !== 'heading' && (isJustified(cover) || (!!s?.justified && cover.length > 1)),
+                keepWithNext: p.segment.kind === 'heading',
+                measure: (t, size) => main.widthOfTextAtSize(t, size),
+                hyphenate: p.segment.kind === 'heading' ? (w) => [w] : hyphenate,
+              };
+            }),
+          ),
+        ),
+      })),
+    );
+    const bare = graphics.get(number) && paintCovers(graphics.get(number)!, placements, geometry);
+    const bpx = bare ? bare.width / geometry.width : 1;
+    const free = (members: Placement[]) => (block: number, x: number, y: number, w: number, h: number) => {
+      if (!bare) return true;
+      const own = members[block].rect;
+      // Vlastní původní plocha bloku se nekontroluje (grafika uvnitř bloku k němu patří).
+      const parts = [
+        [y, Math.min(y + h, own.y)],
+        [Math.max(y, own.y + own.h), y + h],
+      ].filter(([a, b]) => b - a > 0.5);
+      return parts.every(([a, b]) => !hasInk(bare, { x: x * bpx, y: a * bpx, w: w * bpx, h: (b - a) * bpx }, members[block].color));
+    };
+    // Každý řetěz zvlášť; sloupce jednoho textu jsou v jednom řetězu, takže mají stejné písmo.
+    const results = prepared.map(({ chain, blocks }) => {
+      let result = { lines: [] as PlacedLine[], overflow: true };
+      for (const attempt of ATTEMPTS) {
+        result = flow(blocks, chain.frames, attempt, free(chain.frames.flatMap((f) => f.members)));
+        if (!result.overflow) break;
+      }
+      return result;
+    });
+    for (const [c, { lines }] of results.entries()) {
+      const members = prepared[c].chain.frames.flatMap((f) => f.members);
+      for (const line of lines) {
+        const p = members[line.block];
+        const main = await font(fontKey(p.segment));
+        const color = luminance(p.color) < 0.5 ? rgb(1, 1, 1) : p.ink && luminance(p.ink) < 0.6 ? rgb(...p.ink) : rgb(0, 0, 0);
+        drawFlowLine(page, geometry, line, p, main, color, styles, pieces, number);
+        if (line.overflow) overflow.set(p.segment, [...new Set([...(overflow.get(p.segment) ?? []), number])]);
+      }
+    }
+    for (const placement of placements) {
+      if (!placement.text || flowed.has(placement)) continue;
+      const { segment, rect, color: background, ruled, right, room, text, firstWord, marks } = placement;
       const color = luminance(background) < 0.5 ? rgb(1, 1, 1) : rgb(0, 0, 0);
       const regular = await font(segment.serif ? 'serif' : 'sans');
       const bold = await font(segment.serif ? 'serifBold' : 'sansBold');
@@ -655,6 +827,166 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
 }
 
 type Piece = { page: number; x: number; y: number; width: number; height: number };
+
+const fontKey = (s: Segment): keyof typeof FONT_FILES =>
+  s.bold || s.kind === 'heading' ? (s.serif ? 'serifBold' : 'sansBold') : s.serif ? 'serif' : 'sans';
+
+interface ChainFrame extends Frame {
+  members: Placement[];
+}
+
+// Mezera mezi koncem rámu a dalším obsahem pod ním.
+const FRAME_GAP = 4;
+
+const overlapX = (a: Box, b: Box) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+const rows = (cover: Rect['cover']) => new Set((cover ?? []).map(([, y]) => Math.round(y))).size;
+
+/**
+ * Rámy stránky: sloupce bloků s plochami řádků, rozdělené tam, kde mezi bloky leží jiný obsah.
+ * Rámy podobné šířky za sebou (v pořadí čtení) tvoří řetěz, kterým text přetéká.
+ * Samostatný krátký blok (záhlaví, popisek) se sází po staru do svého místa.
+ */
+function pageChains(placements: Placement[]): ChainFrame[][] {
+  const candidates = placements.filter((p) => p.text && p.segment.kind !== 'table' && p.rect.cover?.length && !p.segment.centered);
+  const columns: Placement[][] = [];
+  for (const p of candidates) {
+    const column = columns.find((c) => Math.abs(c[0].rect.x - p.rect.x) < 6);
+    if (column) column.push(p);
+    else columns.push([p]);
+  }
+  // Blok širší než sloupec (záhlaví přes celou stránku) do sloupce nepatří.
+  for (const column of [...columns]) {
+    const full = column.filter((p) => rows(p.rect.cover) >= 3);
+    const width = median((full.length ? full : column).map((p) => p.rect.w))!;
+    const wide = column.filter((p) => p.rect.w > width * 1.15);
+    if (!wide.length || wide.length === column.length) continue;
+    columns.splice(columns.indexOf(column), 1, column.filter((p) => !wide.includes(p)), ...wide.map((p) => [p]));
+  }
+  const pageBottom = Math.max(...placements.map((p) => p.rect.y + p.rect.h));
+  const frames: ChainFrame[] = [];
+  for (const column of columns) {
+    const full = column.filter((p) => rows(p.rect.cover) >= 3);
+    const width = Math.max(...(full.length ? full : column).map((p) => p.rect.x + p.rect.w)) - Math.min(...column.map((p) => p.rect.x));
+    const sorted = [...column].sort((a, b) => a.rect.y - b.rect.y);
+    let members: Placement[] = [];
+    const close = () => {
+      if (!members.length) return;
+      const last = members[members.length - 1];
+      const bottom = last.rect.y + last.rect.h;
+      const room = bottom >= pageBottom - 1 ? Math.min(last.below, MAX_ROOM) : Math.min(last.below, pageBottom - bottom);
+      const x = Math.min(...members.map((p) => p.rect.x));
+      frames.push({ x, w: width, top: members[0].rect.y, bottom: bottom + Math.max(0, room - FRAME_GAP), members });
+      members = [];
+    };
+    sorted.forEach((p, i) => {
+      const prev = sorted[i - 1];
+      if (prev) {
+        const end = prev.rect.y + prev.rect.h;
+        // Mezi bloky je jiný obsah: obrázek, čára, nebo blok, který do sloupce nepatří.
+        const blocked =
+          prev.anchored || p.anchored || prev.below + 3 < p.rect.y - end || placements.some((o) => !column.includes(o) && o.rect.y < p.rect.y && o.rect.y + o.rect.h > end && overlapX(o.rect, p.rect) > 0);
+        if (blocked) close();
+      }
+      members.push(p);
+    });
+    close();
+  }
+  const order = (f: ChainFrame) => placements.indexOf(f.members[0]);
+  frames.sort((a, b) => order(a) - order(b));
+  const chains: ChainFrame[][] = [];
+  for (const frame of frames) {
+    const chain = chains[chains.length - 1];
+    const prev = chain?.[chain.length - 1];
+    if (prev && frame.w / prev.w > 0.8 && frame.w / prev.w < 1.25) chain.push(frame);
+    else chains.push([frame]);
+  }
+  return chains.filter((c) => c.length > 1 || c[0].members.length > 1 || rows(c[0].members[0].rect.cover) > 2);
+}
+
+interface TextStyle {
+  /** Šířka písma originálu vůči Noto (násobek velikosti, aby text zabral stejně místa). */
+  width: number;
+  /** Rozestup řádků jako násobek velikosti písma. */
+  pitch?: number;
+  justified: boolean;
+}
+
+/** Vlastnosti sazby originálu zvlášť pro patkové a bezpatkové písmo, z celých odstavců o aspoň třech řádcích. */
+async function documentStyle(placements: Placement[], fontFor: (serif: boolean) => Promise<PDFFont>): Promise<Map<boolean, TextStyle>> {
+  const samples = new Map<boolean, { width: number[]; pitch: number[]; justified: number }>();
+  for (const p of placements) {
+    const cover = p.rect.cover;
+    const whole = p.segment.rects?.length === 1 && p.segment.rects[0].cover?.length === cover?.length;
+    if (p.segment.kind !== 'paragraph' || !cover || !whole || !p.segment.fontSize || rows(cover) < 3) continue;
+    const serif = !!p.segment.serif;
+    const font = await fontFor(serif);
+    const natural = font.widthOfTextAtSize(clean(p.segment.source).replace(/\s+/g, ' '), p.segment.fontSize);
+    const sample = samples.get(serif) ?? { width: [], pitch: [], justified: 0 };
+    sample.width.push(sum(cover.map(([, , w]) => w)) / natural);
+    const pitch = measuredPitch(cover);
+    if (pitch) sample.pitch.push(pitch / p.segment.fontSize);
+    if (isJustified(cover)) sample.justified++;
+    samples.set(serif, sample);
+  }
+  const style = new Map<boolean, TextStyle>();
+  for (const [serif, s] of samples) {
+    style.set(serif, {
+      width: Math.min(1.05, Math.max(0.9, median(s.width)!)),
+      pitch: median(s.pitch),
+      justified: s.justified > s.width.length / 2,
+    });
+  }
+  return style;
+}
+
+/** Řádek vysázený po úsecích; odkazy ve své barvě, případně podtržené, s novou klikací plochou. */
+function drawFlowLine(
+  page: PDFPage,
+  geometry: PageGeometry,
+  line: PlacedLine,
+  p: Placement,
+  font: PDFFont,
+  color: ReturnType<typeof rgb>,
+  styles: Map<SegmentLink, LinkStyle>,
+  pieces: Map<SegmentLink, Piece[]>,
+  number: number,
+) {
+  const y = geometry.view[3] - line.y - line.size * 0.85;
+  let cx = geometry.view[0] + line.x;
+  for (const token of line.tokens) {
+    const marks = p.marks[p.firstWord + token.word] ?? [];
+    // Přidaný spojovník patří ke stejnému odkazu jako písmeno před ním.
+    const mark = (c: number) => marks[token.from + c] ?? marks[token.from + c - 1];
+    const runs: { text: string; link?: number }[] = [];
+    for (let c = 0; c < token.text.length; c++) {
+      const last = runs[runs.length - 1];
+      if (last && last.link === mark(c)) last.text += token.text[c];
+      else runs.push({ text: token.text[c], link: mark(c) });
+    }
+    for (const run of runs) {
+      const width = font.widthOfTextAtSize(run.text, line.size);
+      const link = run.link === undefined ? undefined : p.segment.links?.[run.link];
+      const style = link && styles.get(link);
+      const ink = style?.color ? rgb(...style.color) : color;
+      page.drawText(run.text, { x: cx, y, size: line.size, font, color: ink });
+      if (link) {
+        const list = pieces.get(link) ?? [];
+        const prev = list[list.length - 1];
+        const joined = prev && prev.page === number && Math.abs(prev.y - (y - line.size * 0.25)) < 0.1 && cx - (prev.x + prev.width) <= line.space + 0.5;
+        const start = joined ? prev.x + prev.width : cx;
+        if (style?.underline) {
+          const uy = y - line.size * 0.12;
+          page.drawLine({ start: { x: start, y: uy }, end: { x: cx + width, y: uy }, thickness: Math.max(0.5, line.size * 0.06), color: ink });
+        }
+        if (joined) prev.width = cx + width - prev.x;
+        else list.push({ page: number, x: cx, y: y - line.size * 0.25, width, height: line.size * 1.15 });
+        pieces.set(link, list);
+      }
+      cx += width;
+    }
+    cx += line.space;
+  }
+}
 
 /**
  * Klikací plochy odkazů na nové místo: původní anotace odkazu se nahradí kopií na každém řádku překladu.

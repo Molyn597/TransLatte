@@ -3,7 +3,7 @@ import path from 'node:path';
 import { nativeImage } from 'electron';
 import mammoth from 'mammoth';
 import { detect } from 'tinyld';
-import { t } from '../shared/i18n';
+import { messagePattern, t } from '../shared/i18n';
 import { isSupported } from '../shared/languages';
 import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, Segment, Settings, Stage } from '../shared/types';
 import { selectPages } from '../shared/pages';
@@ -235,6 +235,8 @@ async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
   }
 }
 
+const geometry = ({ view, rotate, width, height, invisible }: PageGeometry): PageGeometry => ({ view, rotate, width, height, invisible });
+
 async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segment[]> {
   const { job, settings } = ctx;
   const docId = job.id;
@@ -244,7 +246,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
     job.pages = selected.length;
     const texts = [];
     for (const p of selected) texts.push(await pageText(docId, p));
-    ctx.pages = new Map(texts.map(({ view, rotate, width, height, invisible }, i) => [selected[i], { view, rotate, width, height, invisible }]));
+    ctx.pages = new Map(texts.map((text, i) => [selected[i], geometry(text)]));
     const content = removePageFurniture(texts);
     const layouts = texts.map(({ items, width, links }, i) => ({
       page: selected[i],
@@ -687,6 +689,7 @@ async function writeLayoutPdf(ctx: JobContext, segments: Segment[], pages: Map<n
       fontsDir: path.join(__dirname, 'fonts'),
       pageImage: (page, noText) => pageImage(docId, page, noText),
       text: finalText,
+      lang: job.targetLang,
     });
     for (const [seg, numbers] of result.overflow) {
       addNotes(seg, numbers.map((n) => t('pipeline.noFit', { page: n })));
@@ -703,4 +706,33 @@ async function writeLayoutPdf(ctx: JobContext, segments: Segment[], pages: Map<n
   } finally {
     await closePdf(docId);
   }
+}
+
+/** Znovu vytvoří přeložené PDF z hotového překladu, bez modelu. */
+export async function relayoutJob(store: Store, job: Job, settings: Settings) {
+  if (job.ext.toLowerCase() !== '.pdf') return;
+  const segments = await store.segments(job.id);
+  const numbers = [...new Set(segments.flatMap((s) => s.rects?.map((r) => r.page) ?? []))].sort((a, b) => a - b);
+  const pages = new Map<number, PageGeometry>();
+  const docId = `${job.id}-geometry`;
+  await openPdf(docId, new Uint8Array(await readFile(store.inputPath(job))));
+  try {
+    for (const p of numbers) pages.set(p, geometry(await pageText(docId, p)));
+  } finally {
+    await closePdf(docId);
+  }
+  // Dřívější hlášky z vysázení (v češtině i angličtině) se smažou, nové se přidají znovu.
+  const old = [messagePattern('pipeline.noFit')];
+  for (const s of segments) {
+    if (!s.warning) continue;
+    s.warning = old.reduce((w, re) => w.replace(re, ''), s.warning).replace(/\s+/g, ' ').trim() || undefined;
+  }
+  const oldNotes = [messagePattern('pipeline.rotated'), messagePattern('pipeline.layoutFailed')];
+  job.notes = job.notes?.filter((n) => !oldNotes.some((re) => new RegExp(`^${re.source}$`).test(n)));
+  if (!job.notes?.length) delete job.notes;
+  const ctx: JobContext = { job, settings, glossary: [], store, signal: new AbortController().signal, progress: () => {}, pages };
+  await writeLayoutPdf(ctx, segments, pages);
+  job.warnings = segments.filter((s) => s.warning).length;
+  await store.saveSegments(job.id, segments);
+  await store.saveJob(job);
 }

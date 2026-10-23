@@ -175,6 +175,7 @@ export interface Api {
   readOutputPdf(id: string): Promise<Uint8Array | null>;
   cancelJob(id: string): Promise<void>;
   retryJob(id: string, mode: Mode): Promise<void>;
+  relayoutJob(id: string): Promise<void>;
   deleteJob(id: string): Promise<void>;
   openOutput(id: string, kind?: OutputKind): Promise<void>;
   revealOutput(id: string): Promise<void>;

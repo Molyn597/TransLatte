@@ -112,6 +112,8 @@ export const cs = {
   'detail.tab.info': 'Informace',
   'detail.pages': '{count} str.',
   'detail.retry': 'Přeložit znovu',
+  'detail.relayout': 'Znovu vysázet PDF',
+  'detail.relayoutDone': 'PDF je znovu vysázené.',
   'detail.retryQueued': 'Přidáno do fronty: {name} ({mode})',
   'detail.openPdf': 'Otevřít PDF',
   'detail.openWord': 'Otevřít Word',

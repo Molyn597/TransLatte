@@ -17,6 +17,7 @@ const api: Api = {
   readOutputPdf: (id) => ipcRenderer.invoke('job-output-pdf', id),
   cancelJob: (id) => ipcRenderer.invoke('job-cancel', id),
   retryJob: (id, mode) => ipcRenderer.invoke('job-retry', id, mode),
+  relayoutJob: (id) => ipcRenderer.invoke('job-relayout', id),
   deleteJob: (id) => ipcRenderer.invoke('job-delete', id),
   openOutput: (id, kind) => ipcRenderer.invoke('job-open', id, kind),
   revealOutput: (id) => ipcRenderer.invoke('job-reveal', id),

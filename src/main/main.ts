@@ -17,6 +17,7 @@ import { resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, Settings, Stage } from '../shared/types';
 import { status } from './lmstudio';
+import { relayoutJob } from './pipeline';
 import { Queue, SUPPORTED } from './queue';
 import { Store } from './store';
 
@@ -232,6 +233,13 @@ function registerIpc() {
   });
   ipcMain.handle('job-cancel', (_e, id: string) => queue.cancel(id));
   ipcMain.handle('job-retry', (_e, id: string, mode: Mode) => queue.retry(id, mode));
+  ipcMain.handle('job-relayout', async (_e, id: string) => {
+    if (active.has(id)) return;
+    const job = await store.job(id);
+    if (!job) return;
+    await relayoutJob(store, job, await store.settings());
+    send('job-update', job);
+  });
   ipcMain.handle('job-delete', async (_e, id: string) => {
     await queue.remove(id);
     send('job-removed', id);

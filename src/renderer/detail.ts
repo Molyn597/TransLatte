@@ -58,6 +58,21 @@ function meta(job: Job) {
   return chips;
 }
 
+function relayoutButton(job: Job) {
+  const button = h('button', { class: 'btn' }, icon(ICONS.retry), t('detail.relayout'));
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      await window.api.relayoutJob(job.id);
+      toast(t('detail.relayoutDone'));
+      await openDetail(job.id, tab);
+    } finally {
+      button.disabled = false;
+    }
+  };
+  return button;
+}
+
 function retryMenu(job: Job) {
   const wrap = h('div', { class: 'menu-wrap' });
   const menu = h('div', { class: 'menu', hidden: true });
@@ -100,6 +115,7 @@ function actions(job: Job) {
       h('button', { class: 'btn', onclick: () => window.api.revealOutput(job.id) }, icon(ICONS.folder), t('detail.reveal')),
     );
   }
+  if (job.status === 'done' && job.ext.toLowerCase() === '.pdf') list.push(relayoutButton(job));
   list.push(retryMenu(job));
   list.push(
     h(

@@ -27,3 +27,13 @@ export function t(key: MessageKey, params: Record<string, string | number> = {})
     typeof message === 'string' ? message : (message[new Intl.PluralRules(locale()).select(Number(params.count ?? 0))] ?? message.other);
   return text.replace(/\{(\w+)\}/g, (all, name: string) => (name in params ? String(params[name]) : all));
 }
+
+/** Všechny jazykové znění zprávy jako regulární výraz (parametry odpovídají čemukoli); pro nalezení starých hlášek. */
+export function messagePattern(key: MessageKey): RegExp {
+  const texts = (Object.values(DICTIONARIES) as Record<MessageKey, Message>[]).flatMap((d) => {
+    const m = d[key];
+    return typeof m === 'string' ? [m] : Object.values(m);
+  });
+  const source = texts.map((x) => x.split(/\{\w+\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.+?'));
+  return new RegExp(`(?:${source.join('|')})`, 'g');
+}
