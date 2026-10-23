@@ -9,6 +9,7 @@ import {
   markdownToBlocks,
   markDuplicateBlocks,
   dropRepeatedBlocks,
+  addUnreadableTables,
   mergeAcrossPages,
   mergeBrokenHeadings,
   normalizeMarkdownTable,
@@ -385,5 +386,105 @@ describe('odkazy z anotací', () => {
     attachLinks(blocks, [link]);
     expect(blocks[1].links).toEqual([link]);
     expect(blocks[0].links).toBeUndefined();
+  });
+});
+
+describe('časopis ve dvou sloupcích (podle R&D Management 2019)', () => {
+  // Stránka 595 bodů: sloupce 71–282 a 300–511, mezi nimi 18 bodů.
+  const line = (text: string, x: number, y: number) => item(text, x, y, 211);
+  const column = (prefix: string, x: number, top: number, n: number) => Array.from({ length: n }, (_, i) => line(`${prefix} ${i}`, x, top + i * 12));
+
+  it('střídavé živé záhlaví (autoři na sudých, název na lichých stránkách) zahodí', () => {
+    const authors = 'Tomoatsu Shibata, Yasunori Baba, Mitsuru Kodama and Jun Suzuki';
+    const title = 'Managing ambidextrous organizations for corporate transformation';
+    const pages = Array.from({ length: 6 }, (_, n) => ({
+      height: 842,
+      items: [item(n % 2 ? authors : title, 84, 82, 280), item(`Body text of page ${n + 1}`, 84, 300)],
+    }));
+    expect(removePageFurniture(pages).map((items) => items.map((i) => i.str))).toEqual(pages.map((_, n) => [`Body text of page ${n + 1}`]));
+  });
+
+  it('abstrakt přes celou šířku nad sloupci a sloupce pod ním se neprolínají', () => {
+    const items = [
+      item('The concept of ambidextrous organizations, allowing exploration and exploitation', 98, 480, 386),
+      item('activities to coexist within an organization, has attracted considerable interest.', 98, 493, 386),
+      ...column('Left', 71, 600, 5),
+      ...column('Right', 300, 600, 5),
+    ];
+    expect(layoutToBlocks(items, 595, 1).map((b) => b.text.slice(0, 7))).toEqual(['The con', 'Left 0 ', 'Right 0']);
+  });
+
+  it('poslední slovo řádku těsně u středu stránky patří do levého sloupce', () => {
+    const items = [...column('Left', 84, 100, 5).map((i) => ({ ...i, w: 198 })), item('is', 288.7, 136, 6.7), ...column('Right', 313, 100, 5)];
+    const [left, right] = layoutToBlocks(items, 595, 2);
+    expect(left.text).toBe('Left 0 Left 1 Left 2 Left 3 is Left 4');
+    expect(right.rects![0].x).toBe(313);
+  });
+
+  it('iniciálu spojí s prvním slovem a odstavec nebere jako nadpis', () => {
+    const items = [
+      { ...item('M', 71, 639, 29, 30) },
+      item('ost companies involved in photographic', 100, 647, 182),
+      item('film either withdrew from the market or', 100, 660, 182),
+      line('went bankrupt following the emergence.', 71, 672),
+    ];
+    const [block] = layoutToBlocks(items, 595, 1);
+    expect(block).toMatchObject({ kind: 'paragraph', text: 'Most companies involved in photographic film either withdrew from the market or went bankrupt following the emergence.' });
+  });
+
+  it('odstavec přetékající do dalšího sloupce je jeden blok s plochou v obou sloupcích', () => {
+    const items = [
+      line('Most companies involved in photographic film either withdrew', 71, 100),
+      line('from the market or went bankrupt following the emergence of', 71, 112),
+      line('digitalization. How Fujifilm managed its transformation is', 71, 124),
+      line('therefore of great interest. This paper examines the process', 300, 100),
+      line('from the perspective of an ambidextrous organization.', 300, 112),
+      line('Another paragraph in the right column ends with a period.', 300, 140),
+    ];
+    const blocks = layoutToBlocks(items, 595, 1);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].text).toContain('transformation is therefore of great interest');
+    expect(blocks[0].rects!.map((r) => r.x)).toEqual([71, 300]);
+  });
+
+  it('rok na začátku řádku uprostřed věty není číslovaný seznam', () => {
+    const items = [
+      line('applications filed jointly with other organizations between 1982 and', 300, 100),
+      line('2012. Beginning around 2003, the number of joint applications', 300, 112),
+    ];
+    expect(layoutToBlocks(items, 595, 4).map((b) => b.kind)).toEqual(['paragraph']);
+  });
+
+  it('přes konec stránky přeskočí popisek tabulky i štítky grafu nahoře na další stránce', () => {
+    const body = (text: string, page: number): Block => ({ kind: 'paragraph', text, page, fontSize: 10 });
+    const merged = mergeAcrossPages([
+      body('Beginning around 2003, the number of joint applications increased. Both figures indicate that, beginning around 2002–2003,', 4),
+      { kind: 'paragraph', text: 'Table 1. Cumulative numbers of Fujifilm’s patent applications', page: 4, fontSize: 9 },
+      { kind: 'heading', text: 'FUJIFILM 6-13', page: 5, fontSize: 13.5 },
+      { kind: 'paragraph', text: 'Figure 1. Trends in patent applications of peripheral technical areas.', page: 5, fontSize: 8 },
+      body('Fujifilm aggressively and systematically accelerated exploration for diversification.', 5),
+    ]);
+    expect(merged.map((b) => b.text.slice(0, 12))).toEqual(['Beginning ar', 'Table 1. Cum', 'FUJIFILM 6-1', 'Figure 1. Tr']);
+    expect(merged[0].text).toMatch(/2002–2003, Fujifilm aggressively/);
+  });
+
+  it('stejnou lištu webu na další stránce nespojí', () => {
+    const banner = 'Gallup uses cookies to ensure the best website experience. Please select the cookies you want. Privacy Statement';
+    expect(mergeAcrossPages([{ kind: 'paragraph', text: banner, page: 9 }, { kind: 'paragraph', text: banner, page: 10 }])).toHaveLength(2);
+  });
+
+  it('pod popiskem tabulky bez textu (křivky) přidá tabulku k přečtení z výřezu', () => {
+    const size = { width: 595, height: 842 };
+    const items = [item('Table 1. Cumulative numbers of patent applications', 84, 558, 397, 9), item('Body text', 84, 300, 211)];
+    const blocks = layoutToBlocks(items, 595, 4);
+    const out = addUnreadableTables(blocks, items, size);
+    expect(out.at(-1)).toMatchObject({ kind: 'table', text: '', page: 4, needsRepair: true });
+    const [x0, y0, x1, y1] = out.at(-1)!.box!;
+    expect([x0, x1]).toEqual([Math.round((84 / 595) * 999), Math.round((481 / 595) * 999)]);
+    expect(y0).toBeGreaterThan(Math.round((558 / 842) * 999));
+    expect(y1).toBe(Math.round(0.92 * 999));
+    // Tabulka s textovou vrstvou hned pod popiskem se nepřidá.
+    const withText = [...items, ...[584, 596, 608].map((y) => item('Optics 109326 1 30.4%', 84, y, 300))];
+    expect(addUnreadableTables(layoutToBlocks(withText, 595, 4), withText, size).some((b) => b.kind === 'table')).toBe(false);
   });
 });

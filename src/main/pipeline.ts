@@ -36,6 +36,7 @@ import {
 import { ensureDictionary } from './spell';
 import { SpellWorker, spellWorkerPath } from './spell-client';
 import {
+  addUnreadableTables,
   attachLinks,
   blocksToSegments,
   dropRepeatedBlocks,
@@ -48,6 +49,7 @@ import {
   mergeAcrossPages,
   mergeBrokenHeadings,
   normalizeMarkdownTable,
+  ocrGeometry,
   parseOcr,
   removePageFurniture,
   segmentsToMarkdown,
@@ -226,8 +228,15 @@ async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
       );
       table = normalizeMarkdownTable(out);
     }
-    if (table) block.text = table;
-    else {
+    if (table) {
+      block.text = table;
+      // Tabulka bez textové vrstvy dostane plochu až s textem, podle něj se odhaduje písmo.
+      const size = block.page ? ctx.pages?.get(block.page) : undefined;
+      if (!block.rects && size) Object.assign(block, ocrGeometry(block, size));
+    } else if (!block.text) {
+      const caption = blocks[blocks.indexOf(block) - 1];
+      if (caption) caption.warning ??= t('pipeline.tableUnread');
+    } else {
       block.kind = 'paragraph';
       block.warning = t('pipeline.tableFallback');
     }
@@ -270,7 +279,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       const p = layout.page;
       if (!ocrPages.includes(p)) {
         attachLinks(layout.blocks, layout.links);
-        blocks.push(...layout.blocks);
+        blocks.push(...addUnreadableTables(layout.blocks, layout.items, ctx.pages.get(p)!));
         continue;
       }
       ctx.progress({ stage: 'ocr', done, total: ocrPages.length, eta: eta.remaining('ocr', done, ocrPages.length) });

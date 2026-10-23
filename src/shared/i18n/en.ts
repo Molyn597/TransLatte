@@ -200,6 +200,7 @@ export const en: Record<keyof typeof cs, Message> = {
   'spell.missingFiles': 'The Czech dictionary archive is missing the files index.aff and index.dic.',
   'spell.exited': 'The spell check stopped (code {code}).',
   'pipeline.noText': 'No text was found in the document.',
+  'pipeline.tableUnread': 'A table without text (an image or outlines) could not be read and is missing from the translation. Check it against the original.',
   'pipeline.tableFallback': 'The table could not be read cell by cell and was converted to text. Check it against the original.',
   'pipeline.ocrErrors': 'The OCR of this page may contain errors. Check it against the original.',
   'pipeline.ocrMismatch': 'The OCR did not match the text in the PDF, so the text taken directly from the PDF is used (the paragraphs may be in a worse order).',
