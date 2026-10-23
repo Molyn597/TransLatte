@@ -186,35 +186,55 @@ function majority<T extends { str?: string; text?: string }>(list: T[], test: (t
   return yes * 2 > list.reduce((n, t) => n + len(t), 0);
 }
 
-function toLines(items: TextItem[]): Line[] {
+/** Položky seskupené do řádků podle výšky na stránce, shora dolů. */
+function toRows(items: TextItem[]) {
   const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
-  const lines: { y: number; h: number; items: TextItem[] }[] = [];
+  const rows: { y: number; h: number; items: TextItem[] }[] = [];
   for (const item of sorted) {
-    const line = lines.find((l) => Math.abs(l.y - item.y) < Math.max(l.h, item.h) * 0.5);
-    if (line) line.items.push(item);
-    else lines.push({ y: item.y, h: item.h, items: [item] });
+    const row = rows.find((l) => Math.abs(l.y - item.y) < Math.max(l.h, item.h) * 0.5);
+    if (row) row.items.push(item);
+    else rows.push({ y: item.y, h: item.h, items: [item] });
   }
-  return lines
-    .sort((a, b) => a.y - b.y)
+  return rows.sort((a, b) => a.y - b.y);
+}
+
+/** Úseky řádku: položky s mezerou menší než `gap` × výška písma patří k sobě. */
+function rowSpans(items: TextItem[], gap = 1): [number, number][] {
+  const spans: [number, number][] = [];
+  let end = -Infinity;
+  for (const p of [...items].sort((a, b) => a.x - b.x)) {
+    if (spans.length && p.x - end < p.h * gap) spans[spans.length - 1][1] = Math.max(spans[spans.length - 1][1], p.x + p.w);
+    else spans.push([p.x, p.x + p.w]);
+    end = Math.max(end, p.x + p.w);
+  }
+  return spans;
+}
+
+/** Iniciála: jedno velké písmeno na začátku odstavce přes několik řádků („M“ + „ost companies“). */
+function isDropCap(part: TextItem, next: TextItem | undefined, others: TextItem[]) {
+  return !!next && /^\p{Lu}$/u.test(part.str.trim()) && others.length > 0 && part.h > median(others.map((o) => o.h)) * 1.8 && /^\p{Ll}/u.test(next.str.trim());
+}
+
+function toLines(items: TextItem[]): Line[] {
+  return toRows(items)
     .map((line) => {
-      const parts = line.items.sort((a, b) => a.x - b.x);
+      let parts = line.items.sort((a, b) => a.x - b.x);
+      const dropCap = isDropCap(parts[0], parts[1], parts.slice(1)) ? parts[0] : undefined;
+      if (dropCap) parts = [{ ...parts[1], str: dropCap.str.trim() + parts[1].str.trimStart(), x: dropCap.x, w: parts[1].x + parts[1].w - dropCap.x }, ...parts.slice(2)];
       let text = '';
       let end = -Infinity;
-      const spans: [number, number][] = [];
       for (const p of parts) {
         const gap = p.x - end;
         if (text && !text.endsWith(' ') && !p.str.startsWith(' ') && gap > p.h * 0.1) text += ' ';
         text += p.str;
-        if (spans.length && gap < p.h) spans[spans.length - 1][1] = Math.max(spans[spans.length - 1][1], p.x + p.w);
-        else spans.push([p.x, p.x + p.w]);
         end = Math.max(end, p.x + p.w);
       }
       return {
-        y: line.y,
+        y: dropCap ? Math.min(...parts.map((p) => p.y)) : line.y,
         h: Math.max(...parts.map((p) => p.h)),
         x0: Math.min(...parts.map((p) => p.x)),
         x1: Math.max(...parts.map((p) => p.x + p.w)),
-        spans,
+        spans: rowSpans(parts),
         text: text.replace(/\s+/g, ' ').trim(),
         serif: majority(parts, (p) => p.serif),
         bold: majority(parts, (p) => p.bold),
@@ -251,7 +271,9 @@ function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap, pageW
     const isHeading = line.h > bodyHeight * 1.1 && line.text.length < 150;
     const prev = lines[i - 1];
     const gap = i ? line.y - prev.y : Infinity;
-    const isList = LIST_LINE.test(line.text);
+    // „2012. Beginning…“ uprostřed nedokončené věty je pokračování, ne číslovaný seznam.
+    const continuesSentence = current?.kind === 'paragraph' && gap <= lineGap * 1.5 && !SENTENCE_END.test(current.text);
+    const isList = LIST_LINE.test(line.text) && !continuesSentence;
     // Dvouřádkový nadpis (stejné písmo, těsně pod sebou) zůstane jedním nadpisem; zvýrazněný citát
     // mívá větší řádkování, ale pokračování začíná malým písmenem.
     const headingContinues =
@@ -277,7 +299,11 @@ function linesToBlocks(lines: Line[], page: number, { bodyHeight, lineGap, pageW
       current!.text += ` ${line.text}`;
     }
   });
-  for (const block of blocks) Object.assign(block, lineGeometry(members.get(block)!, page, block, pageWidth));
+  for (const block of blocks) {
+    // Delší text většího písma (medailonek autora vedle drobných referencí) není nadpis.
+    if (block.kind === 'heading' && (members.get(block)!.length > 3 || block.text.length > 200)) block.kind = 'paragraph';
+    Object.assign(block, lineGeometry(members.get(block)!, page, block, pageWidth));
+  }
   return blocks;
 }
 
@@ -325,8 +351,52 @@ export function textLayerGeometry(blocks: Block[], items: TextItem[], pageWidth:
   }
 }
 
+const TABLE_CAPTION = /^(table|tab\.|tabulka|tabelle)\s*\d+[.:]/i;
+
 /**
- * Textová vrstva PDF → bloky. Dvousloupcové stránky se čtou po sloupcích,
+ * Tabulka nakreslená křivkami nebo vložená jako obrázek nemá textovou vrstvu, pod popiskem
+ * „Table N.“ pak zůstane prázdné místo. Z něj se udělá tabulka k přečtení vision modelem z výřezu stránky.
+ */
+export function addUnreadableTables(blocks: Block[], items: TextItem[], size: { width: number; height: number }): Block[] {
+  const real = items.filter((i) => i.str.trim());
+  const out: Block[] = [];
+  for (const b of blocks) {
+    out.push(b);
+    const r = b.rects?.[0];
+    if (b.kind === 'table' || !r || b.rects!.length > 1 || !TABLE_CAPTION.test(b.text)) continue;
+    const top = r.y + r.h;
+    // Popisek přes střed stránky patří k tabulce přes celou šířku textu.
+    const wide = r.x < size.width / 2 && r.x + r.w > size.width / 2;
+    const x0 = wide ? Math.min(...real.map((i) => i.x)) : r.x;
+    const x1 = wide ? Math.max(...real.map((i) => i.x + i.w)) : r.x + r.w;
+    const below = real.filter((i) => i.y >= top - 1 && i.x < x1 && i.x + i.w > x0).map((i) => i.y);
+    const bottom = Math.min(size.height * 0.92, ...below);
+    if (bottom - top < (b.fontSize ?? 10) * 5) continue;
+    const box = [x0 / size.width, top / size.height, x1 / size.width, bottom / size.height].map((v) => Math.round(v * 999)) as Block['box'];
+    out.push({ kind: 'table', text: '', page: b.page, box, needsRepair: true });
+  }
+  return out;
+}
+
+/** Svislá mezera mezi sloupci: nejdelší úsek kolem středu stránky, který nepřekrývá žádný úsek řádku. */
+function gutterCenter(spans: [number, number][], pageWidth: number) {
+  const mid = pageWidth / 2;
+  let best = { len: -1, center: mid };
+  let start: number | null = null;
+  for (let x = Math.floor(mid - pageWidth * 0.12); x <= mid + pageWidth * 0.12 + 1; x++) {
+    const free = x <= mid + pageWidth * 0.12 && !spans.some(([a, b]) => a < x && b > x);
+    if (free && start === null) start = x;
+    if (!free && start !== null) {
+      if (x - start > best.len) best = { len: x - start, center: (start + x - 1) / 2 };
+      start = null;
+    }
+  }
+  return best.center;
+}
+
+/**
+ * Textová vrstva PDF → bloky. Stránka se dělí na vodorovné pásy: řádky přes střed stránky
+ * (název, abstrakt, široká tabulka) se čtou celé, pásy dvou sloupců nejdřív vlevo, pak vpravo,
  * jinak by se řádky obou sloupců prolínaly.
  */
 export function layoutToBlocks(items: TextItem[], pageWidth: number, page: number): Block[] {
@@ -334,19 +404,54 @@ export function layoutToBlocks(items: TextItem[], pageWidth: number, page: numbe
   if (!real.length) return [];
   const mid = pageWidth / 2;
   const tolerance = pageWidth * 0.02;
-  const left = real.filter((i) => i.x + i.w <= mid + tolerance);
-  const right = real.filter((i) => i.x >= mid - tolerance);
-  const spanning = real.filter((i) => !left.includes(i) && !right.includes(i));
-  const chars = (list: TextItem[]) => list.reduce((n, i) => n + i.str.length, 0);
-  const total = chars(real);
-  const twoColumns = chars(left) > total * 0.25 && chars(right) > total * 0.25 && chars(spanning) < total * 0.3;
-  const pageMetrics = metrics(toLines(twoColumns ? left : real), pageWidth);
-  if (!twoColumns) return linesToBlocks(toLines(real), page, pageMetrics);
+  const rows = toRows(real).map((row) => {
+    // Užší práh než u ploch řádku: mezera mezi sloupci bývá jen o málo větší než písmo.
+    const spans = rowSpans(row.items, 0.6);
+    return { items: row.items, spans, spanning: spans.some(([a, b]) => a < mid - tolerance && b > mid + tolerance) };
+  });
 
-  const columnsTop = Math.min(...[...left, ...right].map((i) => i.y));
-  const above = spanning.filter((i) => i.y < columnsTop);
-  const below = spanning.filter((i) => i.y >= columnsTop);
-  return [above, left, right, below].flatMap((group) => linesToBlocks(toLines(group), page, pageMetrics));
+  // Pás dvou sloupců: aspoň tři řádky textu na každé straně a řádky široké jako sloupec
+  // (tabulka s krátkými buňkami se na sloupce nedělí).
+  const groups: TextItem[][] = [];
+  let full: TextItem[] = [];
+  const flush = () => {
+    if (full.length) groups.push(full);
+    full = [];
+  };
+  for (let i = 0; i < rows.length; ) {
+    if (rows[i].spanning) {
+      full.push(...rows[i++].items);
+      continue;
+    }
+    const band: typeof rows = [];
+    while (i < rows.length && !rows[i].spanning) band.push(rows[i++]);
+    const gutter = gutterCenter(band.flatMap((r) => r.spans), pageWidth);
+    const side = (r: (typeof band)[number], left: boolean) => r.spans.filter(([a, b]) => (a + b) / 2 < gutter === left);
+    const widths = (left: boolean) => band.map((r) => side(r, left)).filter((s) => s.length).map((s) => Math.max(...s.map(([, b]) => b)) - Math.min(...s.map(([a]) => a)));
+    const columnar = (w: number[]) => w.filter((x) => x > pageWidth * 0.25).length >= 3;
+    if (!columnar(widths(true)) || !columnar(widths(false))) {
+      for (const r of band) full.push(...r.items);
+      continue;
+    }
+    flush();
+    const items = band.flatMap((r) => r.items);
+    groups.push(items.filter((it) => it.x + it.w / 2 < gutter), items.filter((it) => it.x + it.w / 2 >= gutter));
+  }
+  flush();
+
+  const lines = groups.map((g) => toLines(g));
+  const pageMetrics = metrics(lines.flat(), pageWidth);
+  const blocks: Block[] = [];
+  for (const group of lines) {
+    const [first, ...rest] = linesToBlocks(group, page, pageMetrics);
+    if (!first) continue;
+    // Odstavec přetékající do dalšího sloupce; popisky obrázků mezi nimi se přeskočí.
+    const open = blocks.findLast((b) => !isAside(b, first));
+    if (open && continuesInto(open, first)) joinInto(open, first);
+    else blocks.push(first);
+    blocks.push(...rest);
+  }
+  return blocks;
 }
 
 /** Slova textové položky s odhadnutým středem; šířka znaku se bere úměrně délce položky. */
@@ -400,23 +505,33 @@ export function attachLinks(blocks: Block[], links: SegmentLink[]) {
 
 /**
  * Záhlaví a zápatí: krátký text na stejném místě na více stránkách (lišta webu, název časopisu)
- * a samotná čísla stránek u horního nebo dolního okraje.
+ * a samotná čísla stránek u horního nebo dolního okraje. Časopisy střídají živé záhlaví
+ * (autoři na sudých, název článku na lichých stránkách), u okraje proto stačí opakování
+ * na polovině stránek stejné parity.
  */
 export function removePageFurniture(pages: { items: TextItem[]; height: number }[]): TextItem[][] {
   const key = (i: TextItem) => `${i.str.trim()}|${Math.round(i.y / 4)}`;
+  const inMargin = (i: TextItem, height: number) => i.y < height * 0.12 || i.y > height * 0.88;
   const seen = new Map<string, Set<number>>();
   pages.forEach((p, n) => {
     for (const i of p.items) {
-      if (!i.str.trim() || i.str.trim().length > 60) continue;
+      const len = i.str.trim().length;
+      if (!len || len > (inMargin(i, p.height) ? 120 : 60)) continue;
       if (!seen.has(key(i))) seen.set(key(i), new Set());
       seen.get(key(i))!.add(n);
     }
   });
-  const repeated = (i: TextItem) => pages.length > 1 && (seen.get(key(i))?.size ?? 0) >= Math.max(2, pages.length / 2);
-  return pages.map((p) =>
+  const repeated = (i: TextItem, n: number, height: number) => {
+    const on = seen.get(key(i));
+    if (pages.length < 2 || !on) return false;
+    if (on.size >= Math.max(2, pages.length / 2)) return true;
+    const sameParity = [...on].filter((m) => m % 2 === n % 2).length;
+    return inMargin(i, height) && pages.length >= 4 && sameParity >= Math.max(2, Math.ceil(pages.length / 2) / 2);
+  };
+  return pages.map((p, n) =>
     p.items.filter((i) => {
       const nearEdge = i.y < p.height * 0.07 || i.y > p.height * 0.93;
-      return !repeated(i) && !(nearEdge && /^\s*\d{1,3}\s*$/.test(i.str));
+      return !repeated(i, n, p.height) && !(nearEdge && /^\s*\d{1,3}\s*$/.test(i.str));
     }),
   );
 }
@@ -443,25 +558,55 @@ const SENTENCE_END = /[.!?:;…"”'’)\]]$/;
 export function mergeAcrossPages(blocks: Block[]): Block[] {
   const out: Block[] = [];
   for (const b of blocks) {
-    const prev = out[out.length - 1];
-    if (
-      prev &&
-      prev.kind === 'paragraph' &&
-      b.kind === 'paragraph' &&
-      prev.page !== undefined &&
-      b.page === prev.page + 1 &&
-      // Krátký řádek bez tečky (hashtag, podpis) není useknutý odstavec.
-      prev.text.length >= 80 &&
-      !SENTENCE_END.test(prev.text.trim())
-    ) {
-      prev.text = /\p{L}-$/u.test(prev.text) && /^\p{Ll}/u.test(b.text) ? prev.text.slice(0, -1) + b.text : `${prev.text} ${b.text}`;
-      if (b.warning) prev.warning ??= b.warning;
-      joinRects(prev, b);
-      continue;
-    }
-    out.push({ ...b });
+    const open = b.page !== undefined ? openOnPreviousPage(out, b) : undefined;
+    if (open && continuesInto(open, b)) joinInto(open, b);
+    else out.push({ ...b });
   }
   return out;
+}
+
+/**
+ * Poslední blok předchozí stránky, na který může `b` navazovat. Přeskočí se popisky, tabulky
+ * a krátké štítky grafů na konci předchozí i na začátku stránky `b`.
+ */
+function openOnPreviousPage(out: Block[], b: Block) {
+  for (let i = out.length - 1; i >= 0; i--) {
+    const x = out[i];
+    if (x.page === b.page) {
+      if (isAside(x, b) || x.text.length < 40) continue;
+      return undefined;
+    }
+    if (x.page !== b.page! - 1) return undefined;
+    if (!isAside(x, b) && x.text.length >= 40) return x;
+  }
+  return undefined;
+}
+
+/** Písmo z OCR je jen odhad z plochy boxu, porovnává se jen u textové vrstvy. */
+const comparableFont = (a: Block, b: Block) => !a.box && !b.box && !!a.fontSize && !!b.fontSize;
+
+/** Vedlejší blok vůči běžnému textu `body`: tabulka nebo menší písmo (popisek, štítek grafu). */
+function isAside(x: Block, body: Block) {
+  return x.kind === 'table' || (comparableFont(x, body) && x.fontSize! < body.fontSize! - 0.5);
+}
+
+function continuesInto(prev: Block, next: Block) {
+  return (
+    prev.kind === 'paragraph' &&
+    next.kind === 'paragraph' &&
+    // Krátký řádek bez tečky (hashtag, podpis) není useknutý odstavec.
+    prev.text.length >= 80 &&
+    !SENTENCE_END.test(prev.text.trim()) &&
+    // Lišta webu (souhlas s cookies) opakovaná na další stránce není pokračování.
+    !prev.text.endsWith(next.text) &&
+    (!comparableFont(prev, next) || Math.abs(prev.fontSize! - next.fontSize!) <= 0.5)
+  );
+}
+
+function joinInto(prev: Block, b: Block) {
+  prev.text = /\p{L}-$/u.test(prev.text) && /^\p{Ll}/u.test(b.text) ? prev.text.slice(0, -1) + b.text : `${prev.text} ${b.text}`;
+  if (b.warning) prev.warning ??= b.warning;
+  joinRects(prev, b);
 }
 
 /** Nadpis rozdělený na dva bloky (pokračování začíná malým písmenem) se spojí, typicky citát z OCR. */
