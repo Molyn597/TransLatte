@@ -28,6 +28,9 @@ function blend(rates: Rates, m: Measured): Rates {
 export class Queue {
   private waiting: string[] = [];
   private running: { id: string; abort: AbortController } | null = null;
+  // Dotazy na model (překlad oblasti) počkají na běžící úlohu, ale předběhnou čekající.
+  private urgent: (() => Promise<void>)[] = [];
+  private working = false;
   private lastSent = 0;
 
   constructor(
@@ -36,13 +39,26 @@ export class Queue {
   ) {}
 
   get busy() {
-    return this.running !== null || this.waiting.length > 0;
+    return this.running !== null || this.working || this.waiting.length > 0;
+  }
+
+  /** Spustí práci s modelem mezi úlohami, aby nepřehodila model běžící úloze. */
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.urgent.push(() => fn().then(resolve, reject));
+      void this.pump();
+    });
   }
 
   /** Úlohy přerušené pádem nebo zavřením aplikace se po startu označí jako zrušené. */
   async recover() {
     for (const job of await this.store.jobs()) {
-      if (job.status === 'running' || job.status === 'queued') {
+      if (job.resume) {
+        job.status = job.output ? 'done' : 'picking';
+        job.resume = undefined;
+        job.progress = undefined;
+        await this.store.saveJob(job);
+      } else if (job.status === 'running' || job.status === 'queued') {
         job.status = 'cancelled';
         job.error = t('queue.interrupted');
         job.progress = undefined;
@@ -82,6 +98,7 @@ export class Queue {
       finishedAt: undefined,
       error: undefined,
       progress: undefined,
+      resume: undefined,
       output: undefined,
       outputPdf: undefined,
       warnings: 0,
@@ -90,6 +107,24 @@ export class Queue {
     };
     await mkdir(this.store.jobDir(job.id), { recursive: true });
     await copyFile(this.store.inputPath(old), this.store.inputPath(job));
+    await this.enqueue(job);
+  }
+
+  /** Úloha čekající na výběr nebo hotová přeloží vybrané segmenty; ostatní nepřeložené přeskočí. */
+  async translateSegments(id: string, ids: number[]) {
+    const job = await this.store.job(id);
+    if (!job || (job.status !== 'picking' && job.status !== 'done')) return;
+    const chosen = new Set(ids);
+    const segments = await this.store.segments(id);
+    for (const s of segments) {
+      if (s.translation !== undefined) continue;
+      if (chosen.has(s.id)) delete s.skipped;
+      else s.skipped = true;
+    }
+    await this.store.saveSegments(id, segments);
+    job.resume = true;
+    job.status = 'queued';
+    job.error = undefined;
     await this.enqueue(job);
   }
 
@@ -109,7 +144,8 @@ export class Queue {
     this.waiting = this.waiting.filter((w) => w !== id);
     const job = await this.store.job(id);
     if (job) {
-      job.status = 'cancelled';
+      job.status = job.resume ? (job.output ? 'done' : 'picking') : 'cancelled';
+      job.resume = undefined;
       await this.store.saveJob(job);
       this.events.update(job);
     }
@@ -123,7 +159,17 @@ export class Queue {
   }
 
   private async pump(): Promise<void> {
-    if (this.running) return;
+    if (this.running || this.working) return;
+    const task = this.urgent.shift();
+    if (task) {
+      this.working = true;
+      await task();
+      this.working = false;
+      // Po dotazu se model neuvolňuje, uživatel se nejspíš bude ptát dál.
+      if (this.urgent.length || this.waiting.length) return this.pump();
+      this.events.idle();
+      return;
+    }
     const id = this.waiting.shift();
     if (!id) {
       const settings = await this.store.settings();
@@ -140,7 +186,7 @@ export class Queue {
     await this.store.saveJob(job);
     this.events.update(job);
 
-    job.timings = {};
+    if (!job.resume || !job.timings) job.timings = {};
     let stageStart = Date.now();
     const closeStage = () => {
       const stage = job.progress?.stage;
@@ -165,12 +211,16 @@ export class Queue {
           }
         },
       });
-      job.status = 'done';
+      job.status = measured.paused ? 'picking' : 'done';
       const fresh = await this.store.settings();
       await this.store.saveSettings({ ...fresh, rates: blend(fresh.rates, measured) });
     } catch (e) {
       const err = e as Error;
-      if (abort.signal.aborted) {
+      if (job.resume) {
+        // Nepovedené nebo zrušené překládání dalších odstavců nechá úlohu, jak byla.
+        job.status = job.output ? 'done' : 'picking';
+        if (!abort.signal.aborted) (job.notes ??= []).push(err.message || String(err));
+      } else if (abort.signal.aborted) {
         job.status = 'cancelled';
       } else {
         job.status = 'error';
@@ -180,6 +230,7 @@ export class Queue {
       closeStage();
       job.finishedAt = Date.now();
       job.progress = undefined;
+      job.resume = undefined;
       await this.store.saveJob(job);
       this.running = null;
       this.events.update(job);

@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rm, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import type { GlossaryEntry, Job, Segment, Settings } from '../shared/types';
+import type { GlossaryEntry, Job, RegionTranslation, Segment, Settings } from '../shared/types';
 
 export const DEFAULT_SETTINGS: Settings = {
   uiLang: 'system',
@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rates: { ocrPerPage: 7, translatePerKChar: 25, fixPerSegment: 8 },
 };
 
-/** Úložiště pod userData: settings.json, glossary.json a jobs/<id>/{job.json, segments.json, vstup, výstup}. */
+/** Úložiště pod userData: settings.json, glossary.json a jobs/<id>/{job.json, segments.json, study.json, vstup, výstup}. */
 export class Store {
   constructor(readonly root: string) {}
 
@@ -71,6 +71,8 @@ export class Store {
   saveJob = (job: Job) => this.writeJson(path.join(this.jobDir(job.id), 'job.json'), job);
   segments = (id: string) => this.readJson<Segment[]>(path.join(this.jobDir(id), 'segments.json'), []);
   saveSegments = (id: string, segments: Segment[]) => this.writeJson(path.join(this.jobDir(id), 'segments.json'), segments);
+  regions = (id: string) => this.readJson<{ regions: RegionTranslation[] }>(path.join(this.jobDir(id), 'study.json'), { regions: [] }).then((s) => s.regions);
+  saveRegions = (id: string, regions: RegionTranslation[]) => this.writeJson(path.join(this.jobDir(id), 'study.json'), { regions });
   inputPath = (job: Job) => path.join(this.jobDir(job.id), `input${job.ext}`);
   deleteJob = (id: string) => rm(this.jobDir(id), { recursive: true, force: true });
 }

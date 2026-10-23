@@ -596,3 +596,14 @@ describe('štítky diagramů', () => {
     expect(blocks.find((b) => b.text.startsWith('Poznámka'))?.text).toContain('Druhý řádek poznámky');
   });
 });
+
+describe('segmentsToMarkdown', () => {
+  it('vynechá přeskočené a jen-rozvržení segmenty', () => {
+    const md = segmentsToMarkdown([
+      { id: 1, kind: 'paragraph', source: 'Viditelný', translation: 'Viditelný' },
+      { id: 2, kind: 'paragraph', source: 'Přeskočený', skipped: true },
+      { id: 3, kind: 'paragraph', source: 'Jen pro PDF', layoutOnly: true },
+    ]);
+    expect(md).toBe('Viditelný');
+  });
+});

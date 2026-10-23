@@ -1,7 +1,8 @@
 import type { UiLangSetting } from './i18n';
 
 export type Mode = 'fast' | 'balanced' | 'quality';
-export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+/** picking = PDF je přečtené, čeká se na výběr odstavců k překladu. */
+export type JobStatus = 'queued' | 'running' | 'picking' | 'done' | 'error' | 'cancelled';
 export type Stage = 'prepare' | 'extract' | 'ocr' | 'tables' | 'context' | 'translate' | 'check' | 'fix' | 'write' | 'layout';
 export type SegmentKind = 'heading' | 'paragraph' | 'list' | 'table';
 /** mono = černobílý vysoký kontrast (vždy světlý podklad). */
@@ -55,6 +56,8 @@ export interface Segment {
   layoutOnly?: boolean;
   /** Text uvnitř grafu nebo schématu: nepřekládá se, v PDF zůstane původní, ve Wordu není. */
   figure?: boolean;
+  /** Nevybraný k překladu: v PDF zůstane původní, ve Wordu není. */
+  skipped?: boolean;
   links?: SegmentLink[];
 }
 
@@ -94,6 +97,10 @@ export interface Job {
   context?: DocumentContext;
   /** Poznámky k celé úloze, např. přeskočená kontrola pravopisu. */
   notes?: string[];
+  /** Po přečtení PDF počkat na výběr odstavců. */
+  pickParagraphs?: boolean;
+  /** Další běh pokračuje z uložených segmentů a přeloží jen vybrané nepřeložené. */
+  resume?: boolean;
 }
 
 export interface DocumentContext {
@@ -111,6 +118,16 @@ export interface JobOptions {
   sourceLang: string;
   targetLang: string;
   pageRange?: string;
+  pickParagraphs?: boolean;
+}
+
+/** Oblast stránky přeložená na vyžádání (study.json ve složce úlohy). */
+export interface RegionTranslation {
+  page: number;
+  /** Výřez [x0, y0, x1, y1] v poměru ke stránce (0–1). */
+  crop: [number, number, number, number];
+  text: string;
+  createdAt: number;
 }
 
 export interface GlossaryEntry {
@@ -178,6 +195,10 @@ export interface Api {
   cancelJob(id: string): Promise<void>;
   retryJob(id: string, mode: Mode): Promise<void>;
   relayoutJob(id: string): Promise<void>;
+  /** Přeloží vybrané segmenty (id) úlohy čekající na výběr nebo hotové; ostatní nepřeložené se přeskočí. */
+  translateSegments(id: string, ids: number[]): Promise<void>;
+  jobRegions(id: string): Promise<RegionTranslation[]>;
+  translateRegion(id: string, page: number, crop: RegionTranslation['crop']): Promise<RegionTranslation>;
   deleteJob(id: string): Promise<void>;
   openOutput(id: string, kind?: OutputKind): Promise<void>;
   revealOutput(id: string): Promise<void>;

@@ -153,6 +153,7 @@ async function addFiles(paths: string[]) {
       sourceLang: settings.sourceLang,
       targetLang: settings.targetLang,
       pageRange,
+      pickParagraphs: $<HTMLInputElement>('pick-paragraphs').checked,
     });
     toast(paths.length === 1 ? t('home.queued') : t('home.queuedMany', { count: paths.length }));
   } catch (e) {

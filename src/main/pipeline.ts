@@ -5,8 +5,9 @@ import mammoth from 'mammoth';
 import { detect } from 'tinyld';
 import { messagePattern, t } from '../shared/i18n';
 import { isSupported } from '../shared/languages';
-import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, Segment, Settings, Stage } from '../shared/types';
+import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, RegionTranslation, Segment, Settings, Stage } from '../shared/types';
 import { selectPages } from '../shared/pages';
+import { findRegion, normalizeCrop, pendingSegments } from '../shared/regions';
 import { documentOrder, rewriteDates, type DateOrder } from './dates';
 import { buildDocx } from './docx';
 import { buildLayoutPdf, type PageGeometry, type PageImage } from './layout-pdf';
@@ -16,6 +17,7 @@ import {
   OCR_PROMPT,
   TABLE_PROMPT,
   contextPrompt,
+  regionPrompt,
   fixSystem,
   fixUser,
   isTranslateGemma,
@@ -96,6 +98,8 @@ export interface Measured {
   ocrPerPage?: number;
   translatePerKChar?: number;
   fixPerSegment?: number;
+  /** Úloha se po přečtení zastavila a čeká na výběr odstavců. */
+  paused?: boolean;
 }
 
 interface Plan {
@@ -627,37 +631,51 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   const { job, settings, store } = ctx;
   const measured: Measured = {};
   const translating = () => job.sourceLang !== job.targetLang;
-  const eta = new Eta(settings.rates, { ocrPages: 0, chars: 0, context: job.mode === 'quality', fixes: 0 });
+  const eta = new Eta(settings.rates, { ocrPages: 0, chars: 0, context: job.mode === 'quality' && !job.context, fixes: 0 });
 
   ctx.progress({ stage: 'prepare', done: 0, total: 0 });
   await ensureServer(settings.apiUrl);
 
   ctx.progress({ stage: 'extract', done: 0, total: 0 });
   let tick = Date.now();
-  const segments = await extract(ctx, store.inputPath(job), eta);
-  if (!segments.length) throw new Error(t('pipeline.noText'));
-  if (ctx.ocrCount) measured.ocrPerPage = (Date.now() - tick) / 1000 / ctx.ocrCount;
-  job.chars = segments.reduce((n, s) => n + s.source.length, 0);
-  const reviewable = segments.filter((s) => s.kind !== 'table' && !s.layoutOnly).length;
-  eta.setPlan({ chars: job.chars, fixes: job.mode === 'fast' ? 0 : Math.round(reviewable * FIX_SHARE) });
-  if (job.sourceLang === 'auto') job.sourceLang = detectLanguage(segments);
+  let segments: Segment[];
+  if (job.resume) {
+    // Pokračování po výběru odstavců: PDF se znovu nečte, jen se načte geometrie stránek.
+    segments = await store.segments(job.id);
+    if (job.ext.toLowerCase() === '.pdf') ctx.pages = await pageGeometries(store, job, segments);
+  } else {
+    segments = await extract(ctx, store.inputPath(job), eta);
+    if (!segments.length) throw new Error(t('pipeline.noText'));
+    if (ctx.ocrCount) measured.ocrPerPage = (Date.now() - tick) / 1000 / ctx.ocrCount;
+    job.chars = segments.reduce((n, s) => n + s.source.length, 0);
+    if (job.sourceLang === 'auto') job.sourceLang = detectLanguage(segments);
+    if (job.pickParagraphs) {
+      await store.saveSegments(job.id, segments);
+      return { ...measured, paused: true };
+    }
+  }
+  const todo = pendingSegments(segments);
+  const chars = todo.reduce((n, s) => n + s.source.length, 0);
+  const reviewable = todo.filter((s) => s.kind !== 'table' && !s.layoutOnly).length;
+  eta.setPlan({ chars, fixes: job.mode === 'fast' ? 0 : Math.round(reviewable * FIX_SHARE) });
 
   if (!translating()) {
-    for (const s of segments) s.translation = s.source;
-  } else {
+    for (const s of todo) s.translation = s.source;
+  } else if (todo.length) {
     // Kvalitní: Gemma (kontext) → TranslateGemma (překlad) → kontrola bez modelu → Gemma (opravy).
-    if (job.mode === 'quality') job.context = await readContext(ctx, segments, eta);
+    if (job.mode === 'quality' && !job.context) job.context = await readContext(ctx, segments.filter((s) => !s.skipped), eta);
     tick = Date.now();
-    await translateAll(ctx, segments, eta);
-    measured.translatePerKChar = (Date.now() - tick) / job.chars;
+    await translateAll(ctx, todo, eta);
+    // Pár odstavců by odhad zkreslilo načtením modelu.
+    if (chars >= 3000) measured.translatePerKChar = (Date.now() - tick) / chars;
   }
-  applyDeterministic(segments, job.targetLang);
+  applyDeterministic(todo, job.targetLang);
 
-  if (translating()) {
+  if (translating() && todo.length) {
     const speller = job.targetLang === 'cs' ? await startSpeller(ctx) : undefined;
     try {
       const r = reviewer(ctx, speller);
-      const found = await checkAll(ctx, segments, r, eta);
+      const found = await checkAll(ctx, todo, r, eta);
       if (job.mode !== 'fast' && found.size) {
         eta.setPlan({ fixes: found.size });
         tick = Date.now();
@@ -671,13 +689,14 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
     }
   }
 
-  for (const seg of segments) {
+  for (const seg of todo) {
     if (!seg.links) continue;
     const found = findAnchors(finalText(seg), seg.links, seg.source);
     addNotes(seg, seg.links.filter((_, i) => !found[i]).map((l) => t('pipeline.linkNotFound', { link: l.source })));
   }
 
   ctx.progress({ stage: 'write', done: 0, total: 0 });
+  if (job.resume) clearLayoutNotes(job, segments);
   const dir = store.jobDir(job.id);
   job.output = outputName(job);
   await writeFile(path.join(dir, job.output), await buildDocx(job.name, segments));
@@ -729,10 +748,8 @@ async function writeLayoutPdf(ctx: JobContext, segments: Segment[], pages: Map<n
   }
 }
 
-/** Znovu vytvoří přeložené PDF z hotového překladu, bez modelu. */
-export async function relayoutJob(store: Store, job: Job, settings: Settings) {
-  if (job.ext.toLowerCase() !== '.pdf') return;
-  const segments = await store.segments(job.id);
+/** Výřez a otočení stránek, na kterých leží segmenty (bez čtení obsahu stránek). */
+async function pageGeometries(store: Store, job: Job, segments: Segment[]) {
   const numbers = [...new Set(segments.flatMap((s) => s.rects?.map((r) => r.page) ?? []))].sort((a, b) => a - b);
   const pages = new Map<number, PageGeometry>();
   const docId = `${job.id}-geometry`;
@@ -742,7 +759,11 @@ export async function relayoutJob(store: Store, job: Job, settings: Settings) {
   } finally {
     await closePdf(docId);
   }
-  // Dřívější hlášky z vysázení (v češtině i angličtině) se smažou, nové se přidají znovu.
+  return pages;
+}
+
+// Dřívější hlášky z vysázení (v češtině i angličtině) se smažou, nové se přidají znovu.
+function clearLayoutNotes(job: Job, segments: Segment[]) {
   const old = [messagePattern('pipeline.noFit')];
   for (const s of segments) {
     if (!s.warning) continue;
@@ -751,9 +772,50 @@ export async function relayoutJob(store: Store, job: Job, settings: Settings) {
   const oldNotes = [messagePattern('pipeline.rotated'), messagePattern('pipeline.layoutFailed')];
   job.notes = job.notes?.filter((n) => !oldNotes.some((re) => new RegExp(`^${re.source}$`).test(n)));
   if (!job.notes?.length) delete job.notes;
+}
+
+/** Znovu vytvoří přeložené PDF z hotového překladu, bez modelu. */
+export async function relayoutJob(store: Store, job: Job, settings: Settings) {
+  if (job.ext.toLowerCase() !== '.pdf') return;
+  const segments = await store.segments(job.id);
+  const pages = await pageGeometries(store, job, segments);
+  clearLayoutNotes(job, segments);
   const ctx: JobContext = { job, settings, glossary: [], store, signal: new AbortController().signal, progress: () => {}, pages };
   await writeLayoutPdf(ctx, segments, pages);
   job.warnings = segments.filter((s) => s.warning).length;
   await store.saveSegments(job.id, segments);
   await store.saveJob(job);
+}
+
+// Výřez se vykreslí zhruba na tuto šířku v pixelech, aby model přečetl i drobné popisky.
+const REGION_PIXELS = 1600;
+
+/** Oblast stránky přepsaná a přeložená vision modelem; stejná oblast se podruhé vezme z study.json. */
+export async function translateRegion(store: Store, job: Job, settings: Settings, page: number, crop: RegionTranslation['crop']) {
+  const area = normalizeCrop(crop);
+  const regions = await store.regions(job.id);
+  const saved = findRegion(regions, page, area);
+  if (saved) return saved;
+  if (!(await isVisionModel(settings.models.polish))) throw new Error(t('study.noVision', { model: settings.models.polish }));
+  await ensureServer(settings.apiUrl);
+  const docId = `${job.id}-study`;
+  await openPdf(docId, new Uint8Array(await readFile(store.inputPath(job))));
+  let image: string;
+  try {
+    const { width } = await pageText(docId, page);
+    const scale = Math.min(6, Math.max(2, REGION_PIXELS / (width * (area[2] - area[0]))));
+    image = await renderPage(docId, page, scale, area);
+  } finally {
+    await closePdf(docId);
+  }
+  await ensureModel(settings.models.polish, ID.polish);
+  const text = await chat(
+    settings.apiUrl,
+    ID.polish,
+    [{ role: 'user', content: [{ type: 'image_url', image_url: { url: image } }, { type: 'text', text: regionPrompt(job.targetLang) }] }],
+    { maxTokens: 3000 },
+  );
+  const region: RegionTranslation = { page, crop: area, text, createdAt: Date.now() };
+  await store.saveRegions(job.id, [...regions, region]);
+  return region;
 }

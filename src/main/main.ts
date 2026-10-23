@@ -15,9 +15,10 @@ import {
 } from 'electron';
 import { resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
-import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, Settings, Stage } from '../shared/types';
+import { findRegion, normalizeCrop } from '../shared/regions';
+import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, RegionTranslation, Settings, Stage } from '../shared/types';
 import { status } from './lmstudio';
-import { relayoutJob } from './pipeline';
+import { relayoutJob, translateRegion } from './pipeline';
 import { Queue, SUPPORTED } from './queue';
 import { Store } from './store';
 
@@ -239,6 +240,15 @@ function registerIpc() {
     if (!job) return;
     await relayoutJob(store, job, await store.settings());
     send('job-update', job);
+  });
+  ipcMain.handle('job-translate-segments', (_e, id: string, ids: number[]) => queue.translateSegments(id, ids));
+  ipcMain.handle('job-regions', (_e, id: string) => store.regions(id));
+  ipcMain.handle('job-translate-region', async (_e, id: string, page: number, crop: RegionTranslation['crop']) => {
+    const job = await store.job(id);
+    if (!job) throw new Error(t('study.noJob'));
+    const saved = findRegion(await store.regions(id), page, normalizeCrop(crop));
+    if (saved) return saved;
+    return queue.exclusive(async () => translateRegion(store, job, await store.settings(), page, crop));
   });
   ipcMain.handle('job-delete', async (_e, id: string) => {
     await queue.remove(id);

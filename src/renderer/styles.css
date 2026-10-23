@@ -1066,3 +1066,188 @@ input:focus {
   background: var(--danger);
   color: #fff;
 }
+
+/* Výběr odstavců a překlad oblasti */
+.check-field {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.status-picking {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.compare-cell.skipped {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+.pick-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.pick-bar strong {
+  flex: 1 1 auto;
+  font-size: 13px;
+}
+
+.pick-hint,
+.region-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.compare.pick {
+  grid-template-columns: 1fr;
+}
+
+.pick-cell {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.pick-cell.locked {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.pick-cell input,
+.pick-page input {
+  margin-top: 5px;
+  flex: none;
+}
+
+.pick-page {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.pick-page input {
+  margin-top: 0;
+}
+
+.pdf-page {
+  position: relative;
+  max-width: 100%;
+  line-height: 0;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.pdf-page canvas {
+  display: block;
+}
+
+.region-draft,
+.region-frame {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 3px;
+}
+
+.region-draft {
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  pointer-events: none;
+}
+
+.region-frame {
+  padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  background: transparent;
+  cursor: pointer;
+}
+
+.region-frame:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+:root[data-theme='mono'] .region-frame,
+:root[data-theme='mono'] .region-draft {
+  border-color: #000;
+  border-style: dashed;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 45%);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(800px, 100%);
+  max-height: 100%;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.modal-head,
+.modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.modal-head {
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-foot {
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.modal-body {
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.region-image canvas {
+  max-width: 100%;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.region-text {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.region-result table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.region-result td {
+  border: 1px solid var(--line);
+  padding: 5px 9px;
+}

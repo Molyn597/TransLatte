@@ -52,6 +52,7 @@ export const ICONS = {
   download: '<path d="M12 3v12M7 10l5 5 5-5" /><path d="M5 21h14" />',
   retry: '<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path d="M3 3v5h5" />',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />',
+  list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6" />',
 };
 
@@ -98,6 +99,7 @@ export function langPair(job: Job) {
 
 export const STATUS_TEXT: Record<Job['status'], MessageKey> = {
   queued: 'status.queued',
+  picking: 'status.picking',
   running: 'status.running',
   done: 'status.done',
   error: 'status.error',
@@ -105,7 +107,7 @@ export const STATUS_TEXT: Record<Job['status'], MessageKey> = {
 };
 
 export function statusIcon(job: Job) {
-  const map = { done: ICONS.check, error: ICONS.alert, running: ICONS.clock, queued: ICONS.clock, cancelled: ICONS.x };
+  const map = { done: ICONS.check, error: ICONS.alert, running: ICONS.clock, queued: ICONS.clock, picking: ICONS.list, cancelled: ICONS.x };
   return h('span', { class: `status-icon status-${job.status}`, title: t(STATUS_TEXT[job.status]) }, icon(map[job.status]));
 }
 

@@ -7,6 +7,12 @@ export const TABLE_PROMPT =
   'Transcribe this table exactly as a Markdown table (| separators, header separator row). ' +
   'Keep the original language and all values. Output only the table.';
 
+export const regionPrompt = (target: string) =>
+  `Transcribe all text in this image and translate it into ${englishName(target)}. ` +
+  `Translate every title, axis label, legend entry and caption (a figure caption starts with the word for "Figure"); ` +
+  `keep numbers, years and proper names. Keep the reading order and line structure; render a table as a Markdown table. ` +
+  `Output only the ${englishName(target)} translation, without comments. If there is no text, output nothing.`;
+
 /** TranslateGemma má pevnou šablonu; chat API by její strukturovaný vstup rozbilo, proto raw prompt. */
 export function translateGemmaPrompt(text: string, source: string, target: string) {
   const src = englishName(source);

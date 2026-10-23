@@ -889,8 +889,8 @@ export function splitBatch(text: string, expected: number): string[] | null {
 
 export const finalText = (s: Segment) => s.edited ?? s.polished ?? s.translation ?? s.source;
 
-/** Segmenty pro Srovnání, Překlad a export (bez těch, které jsou jen pro přeložené PDF). */
-export const visibleSegments = (segments: Segment[]) => segments.filter((s) => !s.layoutOnly);
+/** Segmenty pro export (bez těch, které jsou jen pro přeložené PDF, a bez nevybraných k překladu). */
+export const visibleSegments = (segments: Segment[]) => segments.filter((s) => !s.layoutOnly && !s.skipped);
 
 export function segmentsToMarkdown(segments: Segment[], text: (s: Segment) => string = finalText): string {
   return visibleSegments(segments)
