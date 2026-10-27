@@ -86,6 +86,14 @@ Jobs and outputs are stored in the app folder:
 - macOS: `~/Library/Application Support/TransLatte/jobs`
 - Windows: `%APPDATA%\TransLatte\jobs`
 
+## Online models (OpenRouter)
+
+Local models via LM Studio stay the default and the recommended choice. Optionally, you can run the models online through [OpenRouter](https://openrouter.ai) instead: in Settings choose "Online via OpenRouter" and paste your API key. The key is stored encrypted with the operating system's secure storage and is never written to the settings file.
+
+- **Privacy:** the text of your documents (and page images when OCR or table repair runs) is sent over the internet to the model provider. Use local mode for sensitive documents.
+- **Models:** pick a model for each role from the OpenRouter catalog (with prices per 1M tokens). The default is `deepseek/deepseek-v4.1-flash` (best Czech in our comparison of eight cheap models); `google/gemini-3.1-flash-lite` is a faster alternative at about twice the price. Models ending in `:free` are slow (one request per ~3 s) and have daily limits.
+- **Cost:** the real price of each job is shown in its details. A rough estimate: a 15-page article costs about $0.02 with DeepSeek V4.1 Flash and about $0.03 with Gemini 3.1 Flash-Lite.
+
 ## Glossary
 
 On the **Glossary** tab you set binding translations of technical terms (e.g. *performance review → hodnocení výkonu*). After translation the check warns when a term is missing and the fix step adds it.

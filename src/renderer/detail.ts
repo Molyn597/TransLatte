@@ -1,7 +1,9 @@
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
+import { formatUsd } from '../shared/estimate';
 import { locale, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import { PDFJS_OPTIONS } from '../shared/pdf';
+import { isOnline } from '../shared/provider';
 import { findRegion, normalizeCrop } from '../shared/regions';
 import type { DocumentContext, Job, JobDetail, Mode, RegionTranslation, Segment, Stage } from '../shared/types';
 import {
@@ -64,6 +66,7 @@ function meta(job: Job) {
   ];
   if (job.pages) chips.push(h('span', { class: 'chip' }, t('detail.pages', { count: job.pages })));
   if (jobDuration(job)) chips.push(h('span', { class: 'chip' }, jobDuration(job)));
+  if (isOnline(job)) chips.push(h('span', { class: 'chip' }, t('job.online')));
   if (job.warnings) chips.push(h('span', { class: 'chip warn' }, t('job.warnings', { count: job.warnings })));
   return chips;
 }
@@ -524,6 +527,10 @@ function infoView(detail: JobDetail) {
   row(t('detail.info.languages'), langPair(job));
   row(t('detail.info.created'), date(job.createdAt));
   if (jobDuration(job)) row(t('detail.info.duration'), jobDuration(job));
+  if (job.cost) {
+    const actual = formatUsd(job.cost);
+    row(t('detail.info.cost'), job.costEstimate ? t('detail.info.costWithEstimate', { amount: actual, estimate: formatUsd(job.costEstimate) }) : actual);
+  } else if (isOnline(job) && job.costEstimate) row(t('detail.info.costEstimate'), `≈ ${formatUsd(job.costEstimate)}`);
   if (job.pages) row(t('detail.info.pages'), job.pageRange ? t('detail.info.pagesSelection', { pages: job.pages, range: job.pageRange }) : String(job.pages));
   if (job.chars) row(t('detail.info.chars'), job.chars.toLocaleString(locale()));
   row(t('detail.info.paragraphs'), String(visible(segments).length));

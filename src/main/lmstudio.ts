@@ -5,6 +5,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { t } from '../shared/i18n';
 import type { LmStatus, Models } from '../shared/types';
+import { isFreeModel } from '../shared/provider';
+import { reasoningParams, sleep, throttleFree, type Endpoint } from './provider';
 
 const exec = promisify(execFile);
 
@@ -97,25 +99,69 @@ export async function unloadAll() {
   if (existsSync(lmsPath())) await lms(['unload', '--all']).catch(() => undefined);
 }
 
-async function post<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok) throw new Error(t('lmstudio.httpError', { status: res.status, body: (await res.text()).slice(0, 300) }));
-  return (await res.json()) as T;
+const RETRIES = 3;
+const BACKOFF_MS = [2000, 4000, 8000];
+const MAX_WAIT_MS = 60_000;
+
+/** Retry-After v sekundách; bez něj se čeká 2, 4 a 8 s. */
+function retryDelay(res: Response, attempt: number) {
+  const seconds = Number(res.headers.get('Retry-After'));
+  return Math.min(MAX_WAIT_MS, res.headers.has('Retry-After') && Number.isFinite(seconds) ? seconds * 1000 : BACKOFF_MS[attempt]);
 }
 
+function errorMessage(body: string) {
+  try {
+    return (JSON.parse(body) as { error?: { message?: string } }).error?.message ?? body;
+  } catch {
+    return body;
+  }
+}
+
+function budgetExhausted(body: string) {
+  try {
+    return (JSON.parse(body) as { error?: { metadata?: { reason?: string } } }).error?.metadata?.reason === 'in_flight_budget_exhausted';
+  } catch {
+    return false;
+  }
+}
+
+async function post<T>(endpoint: Endpoint, path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const free = endpoint.provider === 'openrouter' && isFreeModel((body as { model?: string }).model ?? '');
+  for (let attempt = 0; ; attempt++) {
+    if (free) await throttleFree(signal);
+    const res = await fetch(`${endpoint.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...endpoint.headers },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (res.ok) return (await res.json()) as T;
+    const text = await res.text();
+    if (endpoint.provider === 'openrouter') {
+      if (res.status === 401) throw new Error(t('openrouter.invalidKey'));
+      if (res.status === 402 && !budgetExhausted(text)) throw new Error(t('openrouter.noCredits'));
+      // 502/503: přetížený nebo nedostupný poskytovatel za OpenRouterem, obvykle přechodné.
+      if (res.status === 429 || res.status === 402 || res.status === 502 || res.status === 503) {
+        if (attempt >= RETRIES && free && res.status === 429) throw new Error(t('openrouter.freeDailyLimit'));
+        if (attempt >= RETRIES) throw new Error(t('openrouter.rateLimited', { error: errorMessage(text).slice(0, 300) }));
+        await sleep(retryDelay(res, attempt), signal);
+        continue;
+      }
+    }
+    throw new Error(t('lmstudio.httpError', { status: res.status, body: text.slice(0, 300) }));
+  }
+}
+
+/** Jen lokální server; TranslateGemma na OpenRouter není, tam se používá chat. */
 export async function complete(
-  apiUrl: string,
+  endpoint: Endpoint,
   model: string,
   prompt: string,
   opts: { stop: string[]; maxTokens: number; signal?: AbortSignal },
 ) {
   const data = await post<{ choices: { text: string }[] }>(
-    `${apiUrl}/v1/completions`,
+    endpoint,
+    '/v1/completions',
     { model, prompt, temperature: 0, max_tokens: opts.maxTokens, stop: opts.stop },
     opts.signal,
   );
@@ -124,23 +170,32 @@ export async function complete(
 
 export type ChatContent = string | ({ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } })[];
 
+interface ChatResponse {
+  choices: { message: { content: string | null } }[];
+  usage?: { cost?: number };
+  error?: { message?: string };
+}
+
 export async function chat(
-  apiUrl: string,
+  endpoint: Endpoint,
   model: string,
   messages: { role: 'system' | 'user'; content: ChatContent }[],
-  opts: { maxTokens: number; temperature?: number; signal?: AbortSignal },
+  opts: { maxTokens: number; temperature?: number; signal?: AbortSignal; onCost?: (usd: number) => void },
 ) {
-  const data = await post<{ choices: { message: { content: string | null } }[] }>(
-    `${apiUrl}/v1/chat/completions`,
+  const data = await post<ChatResponse>(
+    endpoint,
+    '/v1/chat/completions',
     {
       model,
       messages,
       temperature: opts.temperature ?? 0,
       max_tokens: opts.maxTokens,
-      // Přemýšlecí modely (Gemma 4) by jinak strávily stovky tokenů úvahami.
-      reasoning_effort: 'none',
+      ...(await reasoningParams(endpoint, model)),
     },
     opts.signal,
   );
+  // OpenRouter občas vrátí chybu poskytovatele se stavem 200.
+  if (data.error) throw new Error(t('lmstudio.httpError', { status: 200, body: data.error.message ?? '' }));
+  if (data.usage?.cost) opts.onCost?.(data.usage.cost);
   return data.choices[0]?.message.content?.trim() ?? '';
 }

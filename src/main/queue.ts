@@ -2,6 +2,8 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { t } from '../shared/i18n';
+import { calibrate, costKey } from '../shared/cost';
+import { activeRates, isOnline } from '../shared/provider';
 import type { Job, JobOptions, Mode, Rates } from '../shared/types';
 import { unloadAll } from './lmstudio';
 import { runJob, type Measured } from './pipeline';
@@ -102,6 +104,9 @@ export class Queue {
       output: undefined,
       outputPdf: undefined,
       warnings: 0,
+      cost: undefined,
+      costEstimate: undefined,
+      costBase: undefined,
       context: undefined,
       notes: undefined,
     };
@@ -173,7 +178,8 @@ export class Queue {
     const id = this.waiting.shift();
     if (!id) {
       const settings = await this.store.settings();
-      if (settings.unloadWhenIdle) await unloadAll();
+      // Online modely se nenačítají, není co uvolňovat.
+      if (settings.unloadWhenIdle && !isOnline(settings)) await unloadAll();
       this.events.idle();
       return;
     }
@@ -195,6 +201,7 @@ export class Queue {
     };
     try {
       const settings = await this.store.settings();
+      job.provider = settings.provider;
       const measured = await runJob({
         job,
         settings,
@@ -213,7 +220,13 @@ export class Queue {
       });
       job.status = measured.paused ? 'picking' : 'done';
       const fresh = await this.store.settings();
-      await this.store.saveSettings({ ...fresh, rates: blend(fresh.rates, measured) });
+      // Rychlosti se zpřesňují u toho poskytovatele, který úlohu zpracoval.
+      const key = isOnline(settings) ? 'remoteRates' : 'rates';
+      const remoteCostFactors =
+        isOnline(settings) && job.costBase && job.cost && !measured.paused && !job.resume
+          ? calibrate(fresh.remoteCostFactors, costKey(settings.remoteModels), job.costBase, job.cost)
+          : fresh.remoteCostFactors;
+      await this.store.saveSettings({ ...fresh, [key]: blend(activeRates({ ...fresh, provider: settings.provider }), measured), remoteCostFactors });
     } catch (e) {
       const err = e as Error;
       if (job.resume) {

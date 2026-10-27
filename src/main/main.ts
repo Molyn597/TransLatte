@@ -17,7 +17,12 @@ import { resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import { findRegion, normalizeCrop } from '../shared/regions';
 import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, RegionTranslation, Settings, Stage } from '../shared/types';
+import { isOnline } from '../shared/provider';
+import { fileInfo } from './fileinfo';
+import { usdCzk } from './fx';
+import { clearKey, readKey, saveKey } from './keystore';
 import { status } from './lmstudio';
+import { openrouterStatus, refreshCatalog } from './provider';
 import { relayoutJob, translateRegion } from './pipeline';
 import { Queue, SUPPORTED } from './queue';
 import { Store } from './store';
@@ -198,8 +203,13 @@ function registerIpc() {
   ipcMain.handle('glossary-save', (_e, entries: GlossaryEntry[]) => store.saveGlossary(entries));
   ipcMain.handle('lm-status', async () => {
     const s = await store.settings();
-    return status(s.apiUrl, s.models);
+    return isOnline(s) ? openrouterStatus(s.remoteModels, await readKey(store.root)) : status(s.apiUrl, s.models);
   });
+  ipcMain.handle('catalog-refresh', () => refreshCatalog());
+  // Klíč se do okna nikdy nevrací, jen informace, zda existuje.
+  ipcMain.handle('api-key-has', async () => Boolean(await readKey(store.root)));
+  ipcMain.handle('api-key-set', (_e, key: string) => saveKey(store.root, key));
+  ipcMain.handle('api-key-clear', () => clearKey(store.root));
   ipcMain.handle('pick-files', async () => {
     const res = await dialog.showOpenDialog(win!, {
       properties: ['openFile', 'multiSelections'],
@@ -207,6 +217,8 @@ function registerIpc() {
     });
     return res.canceled ? [] : res.filePaths;
   });
+  ipcMain.handle('file-info', (_e, paths: string[]) => fileInfo(paths));
+  ipcMain.handle('usd-czk', () => usdCzk(store));
   ipcMain.handle('jobs-add', async (_e, paths: string[], options: JobOptions) => {
     const errors: string[] = [];
     for (const p of paths) {
@@ -248,7 +260,9 @@ function registerIpc() {
     if (!job) throw new Error(t('study.noJob'));
     const saved = findRegion(await store.regions(id), page, normalizeCrop(crop));
     if (saved) return saved;
-    return queue.exclusive(async () => translateRegion(store, job, await store.settings(), page, crop));
+    const region = await queue.exclusive(async () => translateRegion(store, job, await store.settings(), page, crop));
+    send('job-update', job);
+    return region;
   });
   ipcMain.handle('job-delete', async (_e, id: string) => {
     await queue.remove(id);

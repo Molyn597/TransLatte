@@ -1,7 +1,10 @@
 import { getLang, resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
 import { languageName, LANGUAGES } from '../shared/languages';
+import { CHARS_PER_PAGE } from '../shared/cost';
+import { estimateFiles, formatUsd, setCurrency, setCzkRate } from '../shared/estimate';
 import { isValidPageRange } from '../shared/pages';
-import type { Api, Job, Mode, Models, Settings } from '../shared/types';
+import { activeModels, activeRates, isOnline } from '../shared/provider';
+import type { Api, FileInfo, Job, LmStatus, Mode, Models, Settings } from '../shared/types';
 import { closeDetail, detailJobId, openDetail, setupDetail, updateDetail } from './detail';
 import {
   applyI18n,
@@ -31,8 +34,7 @@ type View = 'home' | 'history' | 'detail' | 'glossary' | 'settings';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const ROLE_NAMES: Record<keyof Models, MessageKey> = { ocr: 'role.ocr', translate: 'role.translate', polish: 'role.polish' };
-// Průměrná stránka článku má kolem 3000 znaků a 8 odstavců; opravu potřebuje zhruba 15 % z nich.
-const CHARS_PER_PAGE = 3000;
+// Stránka článku má 8 odstavců; opravu potřebuje zhruba 15 % z nich.
 const FIXES_PER_PAGE = 8 * 0.15;
 const CONTEXT_SECONDS = 10;
 
@@ -40,6 +42,10 @@ let settings: Settings;
 let jobs = new Map<string, Job>();
 let view: View = 'home';
 let previousView: View = 'home';
+// Soubory naposledy přidané z úvodní stránky i s volbami, se kterými se zařadily (pro odhad ceny).
+let lastBatch: { files: FileInfo[]; pageRange: string; mode: Mode } | undefined;
+const TYPICAL_PAGES = 15;
+let catalog: LmStatus['models'] = [];
 
 // ---------- Navigace ----------
 
@@ -67,15 +73,27 @@ async function refreshStatus() {
   const lm = await window.api.lmStatus();
   const dot = $('status-dot');
   dot.className = `status-dot ${lm.online ? 'online' : 'offline'}`;
-  $('lm-state').textContent = lm.online
-    ? t('lm.running')
-    : lm.cli
-      ? t('lm.stopped')
-      : t('lm.notFound');
+  const remote = lm.provider === 'openrouter';
+  $('lm-title').textContent = remote ? t('lm.titleOnline') : 'LM Studio';
+  dot.title = $('lm-title').textContent;
+  $('lm-state').textContent = remote
+    ? lm.online
+      ? t('lm.remoteOk')
+      : lm.hasKey
+        ? t('lm.remoteFail')
+        : t('lm.noKey')
+    : lm.online
+      ? t('lm.running')
+      : lm.cli
+        ? t('lm.stopped')
+        : t('lm.notFound');
+  catalog = lm.models;
+  renderCost();
+  const models = activeModels(settings);
   $('lm-models').replaceChildren(
     ...(Object.keys(ROLE_NAMES) as (keyof Models)[]).map((role) => {
       const missing = lm.missing.includes(role);
-      const name = lm.models.find((m) => m.key === settings.models[role])?.name ?? settings.models[role];
+      const name = lm.models.find((m) => m.key === models[role])?.name ?? models[role];
       return h(
         'li',
         {},
@@ -89,7 +107,7 @@ async function refreshStatus() {
 // ---------- Domů ----------
 
 function modeTime(mode: Mode) {
-  const r = settings.rates;
+  const r = activeRates(settings);
   const k = CHARS_PER_PAGE / 1000;
   const seconds =
     k * r.translatePerKChar +
@@ -110,6 +128,7 @@ function renderModes() {
           onclick: async () => {
             settings.mode = mode;
             renderModes();
+            renderCost();
             await window.api.saveSettings(settings);
           },
         },
@@ -119,6 +138,44 @@ function renderModes() {
       ),
     ),
   );
+}
+
+/** Odhad ceny: vždy pro typický článek v aktuálním režimu, po přidání souborů i pro ně (s režimem a rozsahem, se kterými se zařadily). */
+function renderCost() {
+  // Podtitulek slibuje lokální zpracování; online by to nebyla pravda.
+  $('home-subtitle').textContent = t(isOnline(settings) ? 'home.subtitleOnline' : 'home.subtitle');
+  const el = $('cost-estimate');
+  const models = settings.remoteModels;
+  const prices = Object.fromEntries(catalog.map((m) => [m.key, m.price]));
+  if (!isOnline(settings) || !Object.values(models).every((m) => prices[m])) {
+    el.hidden = true;
+    return;
+  }
+  const names = [...new Set(Object.values(models))].map((id) => catalog.find((m) => m.key === id)?.name ?? id).join(', ');
+  const factors = settings.remoteCostFactors;
+  const typical = estimateFiles({ files: [{ kind: 'pdf', pages: TYPICAL_PAGES }], mode: settings.mode, models, prices, factors });
+  const lines = [
+    h(
+      'div',
+      {},
+      typical.free ? t('home.costTypicalFree', { model: names }) : t('home.costTypical', { amount: formatUsd(typical.usd ?? 0), pages: TYPICAL_PAGES, model: names }),
+    ),
+  ];
+  if (lastBatch) {
+    const est = estimateFiles({ ...lastBatch, models, prices, factors });
+    const pages = t('cost.pages', { count: est.pages });
+    const known = est.free || est.usd !== undefined;
+    const line = !known ? t('home.costDocxOnly') : est.free || est.usd === 0 ? t('home.costFree', { pages }) : t('home.cost', { amount: formatUsd(est.usd!), pages });
+    lines.push(h('div', {}, line, est.unknownDocx && known ? ` · ${t('home.costDocx')}` : '', h('span', { class: 'muted' }, ` ${t('home.costActual')}`)));
+  }
+  el.replaceChildren(...lines);
+  el.hidden = false;
+}
+
+async function showCost(paths: string[], pageRange: string) {
+  const files = isOnline(settings) ? await window.api.fileInfo(paths).catch(() => []) : [];
+  lastBatch = files.length ? { files, pageRange, mode: settings.mode } : undefined;
+  renderCost();
 }
 
 function fillLanguages() {
@@ -155,6 +212,7 @@ async function addFiles(paths: string[]) {
       pageRange,
       pickParagraphs: $<HTMLInputElement>('pick-paragraphs').checked,
     });
+    void showCost(paths, pageRange);
     toast(paths.length === 1 ? t('home.queued') : t('home.queuedMany', { count: paths.length }));
   } catch (e) {
     toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true);
@@ -221,6 +279,7 @@ function jobRow(job: Job) {
       h('div', { class: 'job-row-name' }, `${job.name}${job.ext}`),
       h('div', { class: 'job-row-meta' }, parts.filter(Boolean).join(' · ')),
     ),
+    isOnline(job) ? h('span', { class: 'chip' }, t('job.online')) : '',
     job.warnings ? h('span', { class: 'chip warn' }, t('job.warnings', { count: job.warnings })) : job.status === 'error' ? h('span', { class: 'chip err' }, t('status.error')) : '',
   );
 }
@@ -255,8 +314,10 @@ const applyTheme = () => (document.documentElement.dataset.theme = settings.them
 
 function onSettingsSaved(next: Settings) {
   settings = next;
+  setCurrency(settings.currency);
   applyTheme();
   renderModes();
+  renderCost();
   void refreshStatus();
 }
 
@@ -265,6 +326,8 @@ function onSettingsSaved(next: Settings) {
 async function init() {
   document.body.classList.add(`platform-${window.api.platform}`);
   settings = await window.api.getSettings();
+  setCzkRate(settings.usdCzk?.rate);
+  setCurrency(settings.currency);
   setLang(resolveLang(settings.uiLang, navigator.language));
   document.documentElement.lang = getLang();
   applyI18n();
@@ -282,7 +345,14 @@ async function init() {
   renderHome();
   $('history-search').addEventListener('input', renderHistory);
   const pageRange = $<HTMLInputElement>('page-range');
-  pageRange.addEventListener('input', () => pageRange.classList.toggle('invalid', !isValidPageRange(pageRange.value)));
+  pageRange.addEventListener('input', () => {
+    pageRange.classList.toggle('invalid', !isValidPageRange(pageRange.value));
+  });
+  // Dnešní kurz ČNB se dotáhne na pozadí; do té doby platí poslední uložený.
+  void window.api.usdCzk().catch(() => undefined).then((rate) => {
+    setCzkRate(rate);
+    renderCost();
+  });
   $('lm-refresh').addEventListener('click', () => void refreshStatus());
 
   window.api.onJobUpdate((job) => {
