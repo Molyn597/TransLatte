@@ -41,7 +41,7 @@
 
         <section class="panel lm-card">
           <div class="lm-head">
-            <span>LM Studio</span>
+            <span id="lm-title">LM Studio</span>
             <button class="circle-btn small" id="lm-refresh" title="Zkontrolovat znovu" data-i18n-title="lm.recheck">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></svg>
             </button>
@@ -55,7 +55,7 @@
         <section class="view" data-view="home">
           <header class="view-head">
             <h1 data-i18n="home.title">Přeložit dokument</h1>
-            <p class="muted" data-i18n="home.subtitle">PDF (i skeny), Word, TXT nebo Markdown. Vše se zpracuje lokálně ve tvém LM Studiu.</p>
+            <p class="muted" id="home-subtitle" data-i18n="home.subtitle">PDF (i skeny), Word, TXT nebo Markdown. Vše se zpracuje lokálně ve tvém LM Studiu.</p>
           </header>
 
           <button class="dropzone" id="dropzone">
@@ -88,6 +88,7 @@
               <span data-i18n="home.pickParagraphs">Vybrat odstavce před překladem</span>
             </label>
           </div>
+          <p class="cost-estimate" id="cost-estimate" hidden></p>
 
           <div class="section-title" id="active-title" data-i18n="home.active" hidden>Probíhá</div>
           <div class="job-cards" id="active-jobs"></div>

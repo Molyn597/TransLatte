@@ -7,6 +7,8 @@ export type Stage = 'prepare' | 'extract' | 'ocr' | 'tables' | 'context' | 'tran
 export type SegmentKind = 'heading' | 'paragraph' | 'list' | 'table';
 /** mono = černobílý vysoký kontrast (vždy světlý podklad). */
 export type Theme = 'system' | 'light' | 'dark' | 'mono';
+/** V jaké měně ukazovat ceny online modelů. */
+export type Currency = 'both' | 'czk' | 'usd';
 
 /** Obdélník na stránce PDF v bodech viewportu pdf.js (scale 1, počátek vlevo nahoře). */
 export interface Rect {
@@ -101,6 +103,13 @@ export interface Job {
   pickParagraphs?: boolean;
   /** Další běh pokračuje z uložených segmentů a přeloží jen vybrané nepřeložené. */
   resume?: boolean;
+  /** Poskytovatel modelů, který úlohu zpracoval (bez hodnoty = lokální). */
+  provider?: Provider;
+  /** Cena za online modely v USD (součet za úlohu i překlady oblastí). */
+  cost?: number;
+  /** Odhad ceny po přečtení dokumentu (USD, s koeficientem) a bez něj pro zpřesnění koeficientu. */
+  costEstimate?: number;
+  costBase?: number;
 }
 
 export interface DocumentContext {
@@ -135,6 +144,8 @@ export interface GlossaryEntry {
   target: string;
 }
 
+export type Provider = 'local' | 'openrouter';
+
 export interface Models {
   ocr: string;
   translate: string;
@@ -152,7 +163,11 @@ export interface Settings {
   /** Jazyk rozhraní aplikace (ne překladu). */
   uiLang: UiLangSetting;
   apiUrl: string;
+  provider: Provider;
+  /** Modely lokálního LM Studia. */
   models: Models;
+  /** Modely OpenRouter (id z jejich katalogu). */
+  remoteModels: Models;
   mode: Mode;
   sourceLang: string;
   targetLang: string;
@@ -162,13 +177,35 @@ export interface Settings {
   /** U PDF vytvořit i přeložené PDF se zachovaným vzhledem. */
   layoutPdf: boolean;
   rates: Rates;
+  /** Rychlosti online modelů (odhad času se u nich počítá zvlášť). */
+  remoteRates: Rates;
+  /** Opravné koeficienty odhadu ceny podle sady modelů (skutečná / odhadnutá cena). */
+  remoteCostFactors: Record<string, number>;
+  currency: Currency;
+  /** Poslední kurz USD → CZK z ČNB (pro ceny i v korunách). */
+  usdCzk?: { rate: number; date: string };
 }
 
 export interface LmStatus {
+  /** Bez hodnoty = lokální. */
+  provider?: Provider;
   online: boolean;
   cli: boolean;
-  models: { key: string; name: string; vision: boolean; sizeBytes: number }[];
+  /** Jen OpenRouter: je uložený API klíč. */
+  hasKey?: boolean;
+  models: { key: string; name: string; vision: boolean; sizeBytes: number; price?: ModelPrice; context?: number }[];
+  /** Jen OpenRouter: čas stažení katalogu (ms). */
+  catalogAt?: number;
   missing: (keyof Models)[];
+}
+
+/** Co o souboru zjistí hlavní proces před přidáním úlohy (pro odhad ceny). */
+export type FileInfo = { kind: 'pdf'; pages: number } | { kind: 'text'; chars: number } | { kind: 'docx' };
+
+/** Cena modelu v USD za milion tokenů. */
+export interface ModelPrice {
+  input: number;
+  output: number;
 }
 
 export type OutputKind = 'docx' | 'pdf';
@@ -185,6 +222,15 @@ export interface Api {
   getGlossary(): Promise<GlossaryEntry[]>;
   saveGlossary(entries: GlossaryEntry[]): Promise<void>;
   lmStatus(): Promise<LmStatus>;
+  /** Znovu stáhne katalog OpenRouter mimo mezipaměť. */
+  refreshCatalog(): Promise<void>;
+  /** API klíč OpenRouter žije jen v hlavním procesu; do okna se nikdy nevrací. */
+  hasApiKey(): Promise<boolean>;
+  setApiKey(key: string): Promise<void>;
+  clearApiKey(): Promise<void>;
+  /** Rozsah souborů pro odhad ceny; nečitelný soubor se vynechá. */
+  fileInfo(paths: string[]): Promise<FileInfo[]>;
+  usdCzk(): Promise<number | undefined>;
   pickFiles(): Promise<string[]>;
   pathForFile(file: File): string;
   addJobs(paths: string[], options: JobOptions): Promise<void>;

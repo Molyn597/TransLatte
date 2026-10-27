@@ -1,5 +1,9 @@
-import { t, type MessageKey, type UiLangSetting } from '../shared/i18n';
-import type { GlossaryEntry, LmStatus, Models, Settings, Theme } from '../shared/types';
+import { CHARS_PER_PAGE, estimateCost } from '../shared/cost';
+import { formatUsd } from '../shared/estimate';
+import { locale, t, type MessageKey, type UiLangSetting } from '../shared/i18n';
+import { activeRates, FAST_REMOTE_MODEL, isFreeModel, isOnline, RECOMMENDED_REMOTE_MODEL } from '../shared/provider';
+import { catalogRows, filterCatalog, formatContext, isFree, sharedModel, sortCatalog, visionWarnings } from '../shared/catalog-view';
+import type { Currency, GlossaryEntry, LmStatus, ModelPrice, Models, Provider, Settings, Theme } from '../shared/types';
 import { duration, h, icon, ICONS, toast } from './dom';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -100,6 +104,23 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
     void save();
   });
 
+  const rerender = () => renderSettings(onSaved);
+  const providerSelect = h('select');
+  for (const value of ['local', 'openrouter'] as Provider[]) {
+    providerSelect.append(h('option', { value, selected: settings.provider === value }, t(`settings.provider.${value}`)));
+  }
+  providerSelect.addEventListener('change', async () => {
+    settings.provider = providerSelect.value as Provider;
+    await save();
+    await rerender();
+  });
+  const providerGroup = h(
+    'section',
+    { class: 'setting-group' },
+    h('h2', {}, t('settings.provider')),
+    h('label', { class: 'field' }, h('span', {}, t('settings.provider')), providerSelect),
+  );
+
   const modelGroup = h(
     'section',
     { class: 'setting-group' },
@@ -137,7 +158,7 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
     location.reload();
   });
 
-  const r = settings.rates;
+  const r = activeRates(settings);
   const rates = h(
     'section',
     { class: 'setting-group' },
@@ -150,7 +171,8 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
   );
 
   $('settings').replaceChildren(
-    modelGroup,
+    providerGroup,
+    isOnline(settings) ? remoteGroup(settings, lm, save, rerender) : modelGroup,
     h(
       'section',
       { class: 'setting-group' },
@@ -193,4 +215,173 @@ function modelSelect(
     void save();
   });
   return h('label', { class: 'field' }, h('span', {}, `${t(role.title)} – ${t(role.hint)}`), select);
+}
+
+const price = (n: number) => n.toLocaleString(locale(), { maximumFractionDigits: 3 });
+
+function remoteLabel(m: LmStatus['models'][number]) {
+  const tags = [
+    m.price ? t('settings.remote.price', { input: price(m.price.input), output: price(m.price.output) }) : '',
+    isFreeModel(m.key) ? t('settings.remote.free') : '',
+    m.key === RECOMMENDED_REMOTE_MODEL ? t('settings.remote.recommended') : '',
+    m.key === FAST_REMOTE_MODEL ? t('settings.remote.fast') : '',
+  ].filter(Boolean);
+  return [m.name, ...tags].join(' · ');
+}
+
+function currencySelect(settings: Settings, save: () => Promise<void>, rerender: () => Promise<void>) {
+  const select = h('select');
+  for (const value of ['both', 'czk', 'usd'] as Currency[]) {
+    select.append(h('option', { value, selected: settings.currency === value }, t(`settings.currency.${value}`)));
+  }
+  select.addEventListener('change', async () => {
+    settings.currency = select.value as Currency;
+    await save();
+    await rerender();
+  });
+  return h('label', { class: 'field' }, h('span', {}, t('settings.currency')), select);
+}
+
+function remoteGroup(settings: Settings, lm: LmStatus, save: () => Promise<void>, rerender: () => Promise<void>) {
+  const key = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: t('settings.remote.keyPlaceholder') });
+  const run = (action: () => Promise<void>) => async () => {
+    try {
+      await action();
+      await rerender();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  const saveKey = h('button', { class: 'btn', onclick: run(() => window.api.setApiKey(key.value)) }, t('settings.remote.keySave'));
+  const removeKey = h('button', { class: 'btn danger', onclick: run(() => window.api.clearApiKey()) }, t('settings.remote.keyRemove'));
+  const group = h(
+    'section',
+    { class: 'setting-group' },
+    h('h2', {}, 'OpenRouter'),
+    h('p', { class: 'warn-box' }, t('settings.remote.privacy')),
+    h('label', { class: 'field' }, h('span', {}, t('settings.remote.key')), key),
+    h('div', { class: 'row gap' }, saveKey, lm.hasKey ? removeKey : ''),
+    h('p', { class: 'muted small' }, lm.hasKey ? t('settings.remote.keySaved') : t('settings.remote.keyNone')),
+    currencySelect(settings, save, rerender),
+  );
+  if (!lm.models.length) {
+    group.append(h('p', { class: 'error-box' }, t('settings.remote.noCatalog')));
+    return group;
+  }
+
+  const prices = Object.fromEntries(lm.models.map((m) => [m.key, m.price]));
+  const roleModels = () => Object.values(settings.remoteModels);
+  const filter = h('input', { type: 'search', placeholder: t('settings.remote.filter') });
+  const visionOnly = h('input', { type: 'checkbox' });
+  visionOnly.checked = true;
+  const warnings = h('div', { class: 'stack' });
+  const table = h('div', { class: 'model-scroll' });
+  const more = h('p', { class: 'muted small' });
+  const cutoff = () => ({ text: filter.value, visionOnly: visionOnly.checked, keep: roleModels() });
+
+  const selects = ROLES.map((role) => {
+    const select = h('select');
+    select.addEventListener('change', () => {
+      settings.remoteModels[role.key] = select.value;
+      void save().then(update);
+    });
+    const fillOne = () => {
+      const current = settings.remoteModels[role.key];
+      const options = sortCatalog(filterCatalog(lm.models, { text: filter.value, visionOnly: false, keep: [current] }));
+      select.replaceChildren(
+        ...(options.some((m) => m.key === current) ? [] : [h('option', { value: current, selected: true }, t('settings.modelMissing', { model: current }))]),
+        ...options.map((m) => h('option', { value: m.key, selected: m.key === current }, remoteLabel(m))),
+      );
+    };
+    const hint = role.vision ? ` (${t('settings.remote.visionHint')})` : '';
+    return { fillOne, el: h('label', { class: 'field' }, h('span', {}, `${t(role.title)}${hint}`), select) };
+  });
+
+  const useModel = (id: string) => {
+    for (const role of ROLES) settings.remoteModels[role.key] = id;
+    void save().then(update);
+  };
+  const update = () => {
+    const { rows, total } = catalogRows(lm.models, cutoff());
+    const used = sharedModel(settings.remoteModels);
+    table.replaceChildren(modelList(rows, used, useModel, (m) => sampleCost(m, settings, prices)));
+    more.textContent = total > rows.length ? t('settings.remote.shown', { shown: rows.length, total }) : rows.length ? '' : t('settings.remote.noMatch');
+    warnings.replaceChildren(
+      ...visionWarnings(settings.remoteModels, lm.models).map(({ model }) => h('p', { class: 'warn-box' }, t('settings.remote.noVision', { model: lm.models.find((m) => m.key === model)?.name ?? model }))),
+    );
+    selects.forEach((x) => x.fillOne());
+  };
+  filter.addEventListener('input', update);
+  visionOnly.addEventListener('change', update);
+  update();
+
+  const refresh = h(
+    'button',
+    {
+      class: 'btn',
+      onclick: run(async () => {
+        refresh.disabled = true;
+        await window.api.refreshCatalog();
+      }),
+    },
+    t('settings.remote.refresh'),
+  );
+  const stamp = lm.catalogAt ? t('settings.remote.catalogAt', { date: new Date(lm.catalogAt).toLocaleString(locale()) }) : '';
+  group.append(
+    h('p', { class: 'muted small' }, t('settings.remote.info')),
+    h('div', { class: 'row gap' }, refresh, h('span', { class: 'muted small' }, stamp)),
+    h('div', { class: 'row gap' }, h('div', { class: 'grow' }, filter), h('label', { class: 'check' }, visionOnly, t('settings.remote.visionOnly'))),
+    table,
+    more,
+    warnings,
+    h('details', { class: 'role-models' }, h('summary', {}, t('settings.remote.custom')), ...selects.map((x) => x.el)),
+  );
+  if (Object.values(settings.remoteModels).some(isFreeModel)) group.append(h('p', { class: 'muted small' }, t('settings.remote.freeHint')));
+  return group;
+}
+
+const usd = (n?: number) => (n === undefined ? '—' : price(n));
+
+const SAMPLE_PAGES = 15;
+
+/** Odhad ceny ukázkového dokumentu s tímto modelem ve všech rolích. */
+function sampleCost(m: LmStatus['models'][number], settings: Settings, prices: Record<string, ModelPrice | undefined>) {
+  const models = { ocr: m.key, translate: m.key, polish: m.key };
+  const usd = estimateCost({ chars: SAMPLE_PAGES * CHARS_PER_PAGE, mode: settings.mode, models, prices }, settings.remoteCostFactors);
+  return usd === undefined ? '' : t('settings.remote.estimate', { amount: formatUsd(usd), pages: SAMPLE_PAGES });
+}
+
+function modelList(rows: LmStatus['models'], used: string | undefined, onUse: (id: string) => void, sample: (m: LmStatus['models'][number]) => string) {
+  const chip = (text: string, cls = '') => h('span', { class: `chip ${cls}` }, text);
+  return h(
+    'div',
+    { class: 'model-list' },
+    ...rows.map((m) => {
+      const active = m.key === used;
+      const cost = m.price && (isFree(m) ? t('settings.remote.free') : t('settings.remote.perM', { input: usd(m.price.input), output: usd(m.price.output) }));
+      return h(
+        'div',
+        { class: `model-card${active ? ' active' : ''}` },
+        h(
+          'div',
+          { class: 'model-info' },
+          h('div', { class: 'model-name' }, m.name),
+          h('div', { class: 'model-id' }, m.key),
+          h(
+            'div',
+            { class: 'chips' },
+            m.key === RECOMMENDED_REMOTE_MODEL ? chip(t('settings.remote.recommended'), 'accent') : '',
+            m.key === FAST_REMOTE_MODEL ? chip(t('settings.remote.fast'), 'accent') : '',
+            m.vision ? chip(t('settings.remote.vision')) : chip(t('settings.remote.noVisionTag'), 'warn'),
+            m.context ? chip(t('settings.remote.context', { n: formatContext(m.context) })) : '',
+            cost ? chip(cost) : '',
+            !isFree(m) && sample(m) ? chip(sample(m)) : '',
+          ),
+        ),
+        active
+          ? h('span', { class: 'model-used' }, icon(ICONS.check), t('settings.remote.inUse'))
+          : h('button', { class: 'btn', onclick: () => onUse(m.key) }, t('settings.remote.use')),
+      );
+    }),
+  );
 }

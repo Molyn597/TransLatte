@@ -5,14 +5,18 @@ import mammoth from 'mammoth';
 import { detect } from 'tinyld';
 import { messagePattern, t } from '../shared/i18n';
 import { isSupported, languageName } from '../shared/languages';
-import type { DocumentContext, GlossaryEntry, Job, Progress, Rates, RegionTranslation, Segment, Settings, Stage } from '../shared/types';
+import { activeModels, activeRates, isOnline, parallelFor } from '../shared/provider';
+import type { DocumentContext, GlossaryEntry, Job, Models, Progress, Rates, RegionTranslation, Segment, Settings, Stage } from '../shared/types';
 import { selectPages } from '../shared/pages';
 import { findRegion, normalizeCrop, pendingSegments } from '../shared/regions';
 import { documentOrder, rewriteDates, type DateOrder } from './dates';
 import { buildDocx } from './docx';
 import { buildLayoutPdf, type PageGeometry, type PageImage } from './layout-pdf';
-import { chat, complete, ensureModel, ensureServer, isVisionModel } from './lmstudio';
+import { readKey } from './keystore';
+import { chat, complete, ensureModel, ensureServer, isVisionModel, type ChatContent } from './lmstudio';
 import { closePdf, openPdf, pageText, renderPage } from './pdf';
+import { catalogPrices, isRemoteVision, resolveEndpoint, type Endpoint } from './provider';
+import { baseCost, estimateCost } from '../shared/cost';
 import {
   OCR_PROMPT,
   TABLE_PROMPT,
@@ -65,11 +69,43 @@ import {
 import type { Store } from './store';
 
 const BATCH_CHARS = 1500;
-// LM Studio zpracuje víc požadavků najednou; na M5 Air to zrychlí překlad zhruba o třetinu.
-const PARALLEL = 4;
 const SCAN_TEXT_CHARS = 50;
 const OCR_MATCH = 0.85;
 const ID = { ocr: 'translatte-ocr', translate: 'translatte-translate', polish: 'translatte-polish' };
+
+type Role = keyof Models;
+type Llm = Pick<JobContext, 'job' | 'settings' | 'signal' | 'endpoint'>;
+
+/** Lokálně se model volá načteným identifikátorem, online jeho id z katalogu. */
+const modelName = (settings: Settings, role: Role) => (isOnline(settings) ? settings.remoteModels[role] : ID[role]);
+
+const addCost = (job: Job, usd: number) => (job.cost = (job.cost ?? 0) + usd);
+
+/** Dotaz na model role; cena z online odpovědi se přičte k úloze. */
+const ask = (ctx: Llm, role: Role, messages: { role: 'system' | 'user'; content: ChatContent }[], maxTokens: number) =>
+  chat(ctx.endpoint!, modelName(ctx.settings, role), messages, { maxTokens, signal: ctx.signal, onCost: (usd) => addCost(ctx.job, usd) });
+
+// Online poskytovatel nic nenačítá ani neuvolňuje, modely jsou vždy k dispozici.
+const loadModel = async (ctx: Llm, role: Role) => {
+  if (!isOnline(ctx.settings)) await ensureModel(ctx.settings.models[role], ID[role]);
+};
+
+const isVision = (settings: Settings, role: Role) =>
+  isOnline(settings) ? isRemoteVision(settings.remoteModels[role]) : isVisionModel(settings.models[role]);
+
+/** Odhad ceny podle skutečného počtu znaků; bez katalogu se úloha obejde bez odhadu. */
+async function estimateJobCost(job: Job, settings: Settings, chars: number, ocrPages = 0) {
+  const input = { chars, mode: job.mode, ocrPages, models: settings.remoteModels, prices: await catalogPrices().catch(() => ({})) };
+  job.costBase = baseCost(input);
+  job.costEstimate = estimateCost(input, settings.remoteCostFactors);
+}
+
+/** Lokálně rozjede server, online ověří, že je uložený klíč. */
+async function connect(settings: Settings, root: string): Promise<Endpoint> {
+  if (isOnline(settings)) return resolveEndpoint(settings, await readKey(root));
+  await ensureServer(settings.apiUrl);
+  return resolveEndpoint(settings);
+}
 const CONTEXT_CHARS = 6000;
 const CONTEXT_SECONDS = 10;
 // Odhad před kontrolou: opravu potřebuje zhruba každý sedmý segment.
@@ -92,6 +128,8 @@ export interface JobContext {
   ocrCount?: number;
   /** Výřez a otočení stránek PDF pro přeložené PDF. */
   pages?: Map<number, PageGeometry>;
+  /** Kam jdou požadavky na model; nastaví runJob. */
+  endpoint?: Endpoint;
 }
 
 /** Naměřené časy, ze kterých se zpřesňuje odhad příštích úloh. */
@@ -200,11 +238,11 @@ function htmlToBlocks(html: string): Block[] {
 
 async function ocrPage(ctx: JobContext, docId: string, page: number, scale: number) {
   const image = await renderPage(docId, page, scale);
-  return chat(
-    ctx.settings.apiUrl,
-    ID.ocr,
+  return ask(
+    ctx,
+    'ocr',
     [{ role: 'user', content: [{ type: 'text', text: OCR_PROMPT }, { type: 'image_url', image_url: { url: image } }] }],
-    { maxTokens: 6000, signal: ctx.signal },
+    6000,
   );
 }
 
@@ -215,8 +253,8 @@ const blocksText = (blocks: Block[]) => blocks.map((b) => b.text).join('\n');
 async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
   const broken = blocks.filter((b) => b.needsRepair);
   if (!broken.length) return;
-  const vision = await isVisionModel(ctx.settings.models.polish);
-  if (vision) await ensureModel(ctx.settings.models.polish, ID.polish);
+  const vision = await isVision(ctx.settings, 'polish');
+  if (vision) await loadModel(ctx, 'polish');
   for (const [i, block] of broken.entries()) {
     check(ctx.signal);
     ctx.progress({ stage: 'tables', done: i, total: broken.length });
@@ -225,11 +263,11 @@ async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
       const pad = 0.012;
       const [x0, y0, x1, y1] = block.box.map((v) => v / 999);
       const image = await renderPage(docId, block.page, 3, [x0 - pad, y0 - pad, x1 + pad, y1 + pad]);
-      const out = await chat(
-        ctx.settings.apiUrl,
-        ID.polish,
+      const out = await ask(
+        ctx,
+        'polish',
         [{ role: 'user', content: [{ type: 'image_url', image_url: { url: image } }, { type: 'text', text: TABLE_PROMPT }] }],
-        { maxTokens: 3000, signal: ctx.signal },
+        3000,
       );
       table = normalizeMarkdownTable(out);
     }
@@ -272,14 +310,16 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       blocks: layoutToBlocks(content[i], width, selected[i]),
       scanned: items.reduce((n, it) => n + it.str.trim().length, turned ?? 0) < SCAN_TEXT_CHARS,
     }));
-    // Rychlý režim čte digitální stránky z textové vrstvy, OCR jen u skenů.
-    const ocrPages = layouts.filter((l) => job.mode !== 'fast' || l.scanned).map((l) => l.page);
+    // Rychlý režim čte digitální stránky z textové vrstvy, OCR jen u skenů. Online taky:
+    // obecné modely nevrací pozice bloků, bez nich by se překlad do PDF nevysázel.
+    const layerFirst = job.mode === 'fast' || isOnline(settings);
+    const ocrPages = layouts.filter((l) => !layerFirst || l.scanned).map((l) => l.page);
     // Digitální PDF se pozná už z textové vrstvy, dřív než se spustí OCR.
     const layerText = layouts.map((l) => blocksText(l.blocks)).join('\n');
     if (job.sourceLang === 'auto' && layerText.length > 500) rejectSameLanguage(job, detectLanguage(layerText));
     eta.setPlan({ ocrPages: ocrPages.length, chars: layouts.reduce((n, l) => n + blocksText(l.blocks).length, 0) });
     ctx.ocrCount = ocrPages.length;
-    if (ocrPages.length) await ensureModel(settings.models.ocr, ID.ocr);
+    if (ocrPages.length) await loadModel(ctx, 'ocr');
 
     const blocks: Block[] = [];
     const warnings = new Map<number, string>();
@@ -346,23 +386,23 @@ async function extract(ctx: JobContext, file: string, eta: Eta): Promise<Segment
 
 async function translateText(ctx: JobContext, text: string) {
   const { settings, job } = ctx;
-  const model = settings.models.translate;
   const maxTokens = Math.min(4000, Math.ceil(text.length / 1.5) + 200);
-  if (isTranslateGemma(model)) {
-    return complete(settings.apiUrl, ID.translate, translateGemmaPrompt(text, job.sourceLang, job.targetLang), {
+  // TranslateGemma běží jen lokálně (raw completions); online se vždy použije chat.
+  if (!isOnline(settings) && isTranslateGemma(settings.models.translate)) {
+    return complete(ctx.endpoint!, ID.translate, translateGemmaPrompt(text, job.sourceLang, job.targetLang), {
       stop: ['<end_of_turn>'],
       maxTokens,
       signal: ctx.signal,
     });
   }
-  return chat(
-    settings.apiUrl,
-    ID.translate,
+  return ask(
+    ctx,
+    'translate',
     [
       { role: 'system', content: translateSystem(job.sourceLang, job.targetLang) },
       { role: 'user', content: text },
     ],
-    { maxTokens, signal: ctx.signal },
+    maxTokens,
   );
 }
 
@@ -464,7 +504,7 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
     done += chars;
     ctx.progress({ stage: 'translate', done, total, eta: eta.remaining('translate', done, total) });
   };
-  await ensureModel(ctx.settings.models.translate, ID.translate);
+  await loadModel(ctx, 'translate');
   report(0);
   const tasks: (() => Promise<void>)[] = [
     () => translateLinks(ctx, segments),
@@ -493,7 +533,7 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
       report(items.reduce((n, u) => n + u.source.length, 0));
     }),
   ];
-  await eachParallel(tasks, PARALLEL, (task) => task());
+  await eachParallel(tasks, parallelFor(ctx.settings), (task) => task());
   for (const seg of segments) {
     if (seg.kind !== 'table') seg.translation = stripAddedPeriod(seg.source, joinUnits(all, seg, (u) => u.translation ?? ''));
   }
@@ -512,13 +552,10 @@ async function readContext(ctx: JobContext, segments: Segment[], eta: Eta): Prom
     .map((s) => s.source)
     .join('\n\n')
     .slice(0, CONTEXT_CHARS);
-  await ensureModel(settings.models.polish, ID.polish);
+  await loadModel(ctx, 'polish');
   let context: DocumentContext | undefined;
   try {
-    const out = await chat(settings.apiUrl, ID.polish, [{ role: 'user', content: contextPrompt(sample, job.targetLang) }], {
-      maxTokens: 1200,
-      signal: ctx.signal,
-    });
+    const out = await ask(ctx, 'polish', [{ role: 'user', content: contextPrompt(sample, job.targetLang) }], 1200);
     context = parseContext(out);
   } catch (err) {
     if (ctx.signal.aborted) throw err;
@@ -588,14 +625,14 @@ async function fixSegment(ctx: JobContext, seg: Segment, issues: Issue[], r: Rev
   const { settings, job } = ctx;
   const before = finalText(seg);
   const cs = job.targetLang === 'cs';
-  const out = await chat(
-    settings.apiUrl,
-    ID.polish,
+  const out = await ask(
+    ctx,
+    'polish',
     [
       { role: 'system', content: fixSystem(job.targetLang, relevantGlossary(seg.source, reviewGlossary(r.options)), job.context) },
       { role: 'user', content: fixUser(seg.source, before, issues.map((i) => (cs ? i.cs : i.en)), job.targetLang) },
     ],
-    { maxTokens: Math.min(4000, Math.ceil(before.length / 1.5) + 200), signal: ctx.signal },
+    Math.min(4000, Math.ceil(before.length / 1.5) + 200),
   );
   let after = stripAddedPeriod(seg.source, out);
   if (cs) after = fixCzech(after);
@@ -610,9 +647,9 @@ async function fixAll(ctx: JobContext, found: Map<Segment, Issue[]>, r: Reviewer
   const todo = [...found.keys()];
   let done = 0;
   const report = () => ctx.progress({ stage: 'fix', done, total: todo.length, eta: eta.remaining('fix', done, todo.length) });
-  await ensureModel(ctx.settings.models.polish, ID.polish);
+  await loadModel(ctx, 'polish');
   report();
-  await eachParallel(todo, PARALLEL, async (seg) => {
+  await eachParallel(todo, parallelFor(ctx.settings), async (seg) => {
     check(ctx.signal);
     try {
       found.set(seg, await fixSegment(ctx, seg, found.get(seg)!, r));
@@ -639,10 +676,10 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   const { job, settings, store } = ctx;
   const measured: Measured = {};
   const translating = () => job.sourceLang !== job.targetLang;
-  const eta = new Eta(settings.rates, { ocrPages: 0, chars: 0, context: job.mode === 'quality' && !job.context, fixes: 0 });
+  const eta = new Eta(activeRates(settings), { ocrPages: 0, chars: 0, context: job.mode === 'quality' && !job.context, fixes: 0 });
 
   ctx.progress({ stage: 'prepare', done: 0, total: 0 });
-  await ensureServer(settings.apiUrl);
+  ctx.endpoint = await connect(settings, store.root);
 
   ctx.progress({ stage: 'extract', done: 0, total: 0 });
   let tick = Date.now();
@@ -669,6 +706,7 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   const chars = todo.reduce((n, s) => n + s.source.length, 0);
   const reviewable = todo.filter((s) => s.kind !== 'table' && !s.layoutOnly).length;
   eta.setPlan({ chars, fixes: job.mode === 'fast' ? 0 : Math.round(reviewable * FIX_SHARE) });
+  if (isOnline(settings)) await estimateJobCost(job, settings, chars, ctx.ocrCount);
 
   if (!translating()) {
     for (const s of todo) s.translation = s.source;
@@ -810,8 +848,9 @@ export async function translateRegion(store: Store, job: Job, settings: Settings
   const regions = await store.regions(job.id);
   const saved = findRegion(regions, page, area);
   if (saved) return saved;
-  if (!(await isVisionModel(settings.models.polish))) throw new Error(t('study.noVision', { model: settings.models.polish }));
-  await ensureServer(settings.apiUrl);
+  const model = activeModels(settings).polish;
+  if (!(await isVision(settings, 'polish'))) throw new Error(t('study.noVision', { model }));
+  const llm: Llm = { job, settings, signal: new AbortController().signal, endpoint: await connect(settings, store.root) };
   const docId = `${job.id}-study`;
   await openPdf(docId, new Uint8Array(await readFile(store.inputPath(job))));
   let image: string;
@@ -822,14 +861,15 @@ export async function translateRegion(store: Store, job: Job, settings: Settings
   } finally {
     await closePdf(docId);
   }
-  await ensureModel(settings.models.polish, ID.polish);
-  const text = await chat(
-    settings.apiUrl,
-    ID.polish,
+  await loadModel(llm, 'polish');
+  const text = await ask(
+    llm,
+    'polish',
     [{ role: 'user', content: [{ type: 'image_url', image_url: { url: image } }, { type: 'text', text: regionPrompt(job.targetLang) }] }],
-    { maxTokens: 3000 },
+    3000,
   );
   const region: RegionTranslation = { page, crop: area, text, createdAt: Date.now() };
   await store.saveRegions(job.id, [...regions, region]);
+  if (job.cost !== undefined) await store.saveJob(job);
   return region;
 }

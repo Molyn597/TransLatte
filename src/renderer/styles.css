@@ -80,6 +80,8 @@
 :root[data-theme='mono'] .compare-cell.has-warning,
 :root[data-theme='mono'] .chip.warn,
 :root[data-theme='mono'] .chip.err,
+:root[data-theme='mono'] .warn-box,
+:root[data-theme='mono'] .chip.accent,
 :root[data-theme='mono'] .error-box {
   outline: 1px solid #000000;
   outline-offset: -1px;
@@ -430,7 +432,8 @@ body::before {
 select,
 input[type='text'],
 input[type='url'],
-input[type='search'] {
+input[type='search'],
+input[type='password'] {
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -1250,4 +1253,140 @@ input:focus {
 .region-result td {
   border: 1px solid var(--line);
   padding: 5px 9px;
+}
+
+/* OpenRouter model table */
+.warn-box {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.grow input {
+  width: 100%;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.model-scroll {
+  max-height: 460px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--pill);
+}
+
+.model-card:hover {
+  border-color: var(--accent);
+}
+
+.model-card.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.model-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-name {
+  font-weight: 600;
+}
+
+.model-id {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.model-card.active .model-id {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.chip.accent {
+  background: var(--accent);
+  color: #fff;
+}
+
+.model-card.active .chip:not(.accent):not(.warn) {
+  background: var(--pill);
+}
+
+.model-used {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.model-used svg {
+  width: 16px;
+  height: 16px;
+}
+
+.check input {
+  accent-color: var(--accent);
+}
+
+.role-models {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.role-models summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.role-models[open] summary {
+  margin-bottom: 12px;
+}
+
+.role-models .field + .field {
+  margin-top: 12px;
+}
+
+.cost-estimate {
+  margin: 12px 0 0;
+  font-size: 13px;
 }

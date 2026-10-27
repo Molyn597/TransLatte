@@ -10,7 +10,7 @@ vi.mock('../src/main/lmstudio', () => ({ unloadAll: vi.fn() }));
 function makeStore() {
   const jobs = new Map<string, Job>();
   const segments = new Map<string, Segment[]>();
-  let settings = { rates: { ocrPerPage: 1, translatePerKChar: 1, fixPerSegment: 1 }, unloadWhenIdle: false };
+  let settings: Record<string, unknown> = { provider: 'local', remoteRates: { ocrPerPage: 10, translatePerKChar: 10, fixPerSegment: 10 }, rates: { ocrPerPage: 1, translatePerKChar: 1, fixPerSegment: 1 }, unloadWhenIdle: false };
   const store = {
     jobs,
     job: async (id: string) => jobs.get(id),
@@ -140,6 +140,30 @@ describe('Queue', () => {
 
       await queue.cancel('r');
       await vi.waitFor(() => expect(store.jobs.get('r')?.status).toBe('done'));
+    });
+  });
+
+  describe('rychlosti podle poskytovatele', () => {
+    const run = async (provider: string) => {
+      runJob.mockResolvedValue({ translatePerKChar: 11 });
+      Object.assign(await store.settings(), { provider });
+      queue['enqueue'](makeJob(`rate-${provider}`));
+      await vi.waitFor(() => expect(store.jobs.get(`rate-${provider}`)?.status).toBe('done'));
+      return store.settings() as Promise<Record<string, { translatePerKChar: number }>>;
+    };
+
+    it('lokální úloha zpřesní rates, ne remoteRates', async () => {
+      const s = await run('local');
+      expect(s.rates.translatePerKChar).toBeCloseTo(4);
+      expect(s.remoteRates.translatePerKChar).toBe(10);
+      expect(store.jobs.get('rate-local')?.provider).toBe('local');
+    });
+
+    it('online úloha zpřesní remoteRates, ne rates', async () => {
+      const s = await run('openrouter');
+      expect(s.remoteRates.translatePerKChar).toBeCloseTo(10.3);
+      expect(s.rates.translatePerKChar).toBe(1);
+      expect(store.jobs.get('rate-openrouter')?.provider).toBe('openrouter');
     });
   });
 });

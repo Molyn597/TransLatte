@@ -1,11 +1,14 @@
 import { mkdir, readFile, readdir, rm, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import type { GlossaryEntry, Job, RegionTranslation, Segment, Settings } from '../shared/types';
+import { RECOMMENDED_REMOTE_MODEL } from '../shared/provider';
+import type { GlossaryEntry, Job, Rates, RegionTranslation, Segment, Settings } from '../shared/types';
 
 export const DEFAULT_SETTINGS: Settings = {
   uiLang: 'system',
   apiUrl: 'http://localhost:1234',
+  provider: 'local',
   models: { ocr: 'unlimited-ocr', translate: 'translategemma-12b-it', polish: 'google/gemma-4-12b-qat' },
+  remoteModels: { ocr: RECOMMENDED_REMOTE_MODEL, translate: RECOMMENDED_REMOTE_MODEL, polish: RECOMMENDED_REMOTE_MODEL },
   mode: 'fast',
   sourceLang: 'auto',
   targetLang: 'cs',
@@ -14,6 +17,15 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   layoutPdf: true,
   rates: { ocrPerPage: 7, translatePerKChar: 25, fixPerSegment: 8 },
+  remoteRates: { ocrPerPage: 6, translatePerKChar: 6, fixPerSegment: 3 },
+  remoteCostFactors: {},
+  currency: 'both',
+};
+
+/** Jen známé položky sazeb; starší nastavení měla místo fixPerSegment polishPerKChar. */
+const mergeRates = (base: Rates, saved?: Partial<Rates>): Rates => {
+  const { ocrPerPage, translatePerKChar, fixPerSegment } = { ...base, ...saved };
+  return { ocrPerPage, translatePerKChar, fixPerSegment };
 };
 
 /** Úložiště pod userData: settings.json, glossary.json a jobs/<id>/{job.json, segments.json, study.json, vstup, výstup}. */
@@ -40,13 +52,15 @@ export class Store {
 
   async settings(): Promise<Settings> {
     const saved = await this.readJson<Partial<Settings>>(path.join(this.root, 'settings.json'), {});
-    // Starší nastavení mají místo fixPerSegment polishPerKChar; zahodí se.
-    const { ocrPerPage, translatePerKChar, fixPerSegment } = { ...DEFAULT_SETTINGS.rates, ...saved.rates };
     return {
       ...DEFAULT_SETTINGS,
       ...saved,
+      provider: saved.provider === 'openrouter' ? 'openrouter' : 'local',
       models: { ...DEFAULT_SETTINGS.models, ...saved.models },
-      rates: { ocrPerPage, translatePerKChar, fixPerSegment },
+      remoteModels: { ...DEFAULT_SETTINGS.remoteModels, ...saved.remoteModels },
+      rates: mergeRates(DEFAULT_SETTINGS.rates, saved.rates),
+      remoteRates: mergeRates(DEFAULT_SETTINGS.remoteRates, saved.remoteRates),
+      remoteCostFactors: { ...saved.remoteCostFactors },
     };
   }
 
