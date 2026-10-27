@@ -7,7 +7,6 @@ import {
   backgroundColor,
   blankBelow,
   buildLayoutPdf,
-  fitTable,
   fitText,
   inkDifference,
   lineRuns,
@@ -16,7 +15,9 @@ import {
   wordMarks,
   visiblePart,
   splitText,
+  tableCells,
   tableRows,
+  TextFont,
   textHeight,
   toPdfRect,
   wrapText,
@@ -96,13 +97,38 @@ describe('sazba', () => {
     expect(wide).toMatchObject({ size: 10, fits: true, lines: [text] });
   });
 
-  it('tabulku rozloží do sloupců podle počtu buněk', () => {
-    const rows = tableRows('| Skupina | Průměrný spánek |\n| --- | --- |\n| Krátce spící | 5,8 h |');
-    expect(rows).toEqual([['Skupina', 'Průměrný spánek'], ['Krátce spící', '5,8 h']]);
-    const table = fitTable(rows, { w: 200, h: 30 }, 10, measure);
-    expect(table.widths).toHaveLength(2);
-    expect(table.widths.reduce((n, w) => n + w, 0)).toBeCloseTo(200);
-    expect(table.fits).toBe(true);
+  it('tabulku přeloží po buňkách na místě textu originálu', () => {
+    const item = (str: string, x: number, y: number) => ({ str, x, y, w: str.length * 4, h: 8 });
+    const items = [
+      item('Variable', 100, 100),
+      item('Value', 300, 100),
+      item('Years of schooling', 100, 115),
+      item('1.17', 300, 115),
+      item('Low (years schooling', 100, 130),
+      item('< 2.67)', 108, 140),
+      item('0', 300, 130),
+    ];
+    const table: Segment = {
+      id: 7,
+      kind: 'table',
+      source: '| Variable | Value |\n| --- | --- |\n| Years of schooling | 1.17 |\n| Low (years schooling < 2.67) | 0 |',
+      rects: [{ page: 1, x: 98, y: 98, w: 230, h: 52 }],
+    };
+    const translation = '| Proměnná | Hodnota |\n| --- | --- |\n| **Počet let školní docházky** | 1.17 |\n| Nízká (< 2.67) | 0 |';
+    const cells = tableCells(table, translation, items);
+    expect(cells.map((c) => c.translation)).toEqual(['Proměnná', 'Hodnota', 'Počet let školní docházky', 'Nízká (< 2.67)']);
+    const years = cells[2].rects![0];
+    // Místo sahá k sousední buňce vpravo, zakryje se jen původní text.
+    expect(years.x + years.w).toBeLessThan(300);
+    expect(years.x + years.w).toBeGreaterThan(250);
+    expect(years.cover).toEqual([[100, 115, 72, 8 * 1.2]]);
+    // Zalomená buňka se poskládá ze dvou úseků pod sebou.
+    expect(cells[3].rects![0].cover).toHaveLength(2);
+  });
+
+  it('tabulka s jiným počtem buněk v překladu zůstane původní', () => {
+    const table: Segment = { id: 1, kind: 'table', source: '| A | B |\n| --- | --- |', rects: [{ page: 1, x: 0, y: 0, w: 100, h: 20 }] };
+    expect(tableCells(table, '| A |\n| --- |', [])).toEqual([]);
   });
 });
 
@@ -297,7 +323,6 @@ describe('sloupce a řetězy rámů', () => {
         cover: Array.from({ length: o.rows }, (_, i): [number, number, number, number] => [o.x, o.y + i * 14, o.w, 12]),
       },
       color: [1, 1, 1],
-      ruled: false,
       right: o.x + o.w,
       room: 0,
       below: o.below ?? 1000,
@@ -378,5 +403,27 @@ describe('sloupce a řetězy rámů', () => {
   it('samostatný krátký blok se nevrátí', () => {
     const short = block({ x: 70, y: 100, w: 210, rows: 2 });
     expect(pageChains([short])).toEqual([]);
+  });
+});
+
+describe('záložní písmo pro matematické znaky', () => {
+  const main = { widthOfTextAtSize: (t: string, s: number) => t.length * s * 0.5 } as never;
+  const fallback = { widthOfTextAtSize: (t: string, s: number) => t.length * s } as never;
+  const covers = (code: number) => code !== 0x2264; // ≤
+
+  it('rozdělí text na úseky hlavního a záložního písma', () => {
+    const runs = new TextFont(main, covers, fallback).runs('a ≤ b');
+    expect(runs.map((r) => r.text)).toEqual(['a ', '≤', ' b']);
+    expect(runs.map((r) => r.font)).toEqual([main, fallback, main]);
+  });
+
+  it('šířka textu sečte šířky úseků obou písem', () => {
+    expect(new TextFont(main, covers, fallback).widthOfTextAtSize('a ≤ b', 10)).toBe(30);
+  });
+
+  it('bez záložního písma zůstane jediný úsek hlavního písma', () => {
+    const font = new TextFont(main, covers);
+    expect(font.runs('a ≤ b')).toEqual([{ text: 'a ≤ b', font: main }]);
+    expect(font.widthOfTextAtSize('a ≤ b', 10)).toBe(25);
   });
 });

@@ -40,11 +40,15 @@ export function markdownToBlocks(md: string, page?: number): Block[] {
   return blocks;
 }
 
-/** OCR modely vracejí LaTeX zápis i u obyčejného textu („\(18\%\)“). */
+/** OCR modely vracejí LaTeX zápis i u obyčejného textu („\(18\%\)“, „$-0.43^b$“, „^{a} Significant“). */
 function cleanOcrText(text: string) {
   return text
     .replace(/\\\((.*?)\\\)/g, '$1')
+    // Jen krátký zápis bez mezer, ať „$5 and $10“ zůstane.
+    .replace(/\$([^$\s]{1,40})\$/g, '$1')
     .replace(/\\([%$&#_])/g, '$1')
+    .replace(/\^\{([a-z0-9]{1,3})\}/gi, '$1')
+    .replace(/\^([a-z])\b/gi, '$1')
     .trim();
 }
 
@@ -76,7 +80,7 @@ export function parseOcr(output: string, page: number, size?: { width: number; h
     const m = line.match(labelled);
     if (!m) {
       // Pokračování předchozího bloku (např. víceřádková tabulka).
-      if (!skipping && blocks.length) blocks[blocks.length - 1].text += `\n${line}`;
+      if (!skipping && blocks.length) blocks[blocks.length - 1].text += `\n${cleanOcrText(line)}`;
       continue;
     }
     const [, label, coords, content] = m;
@@ -167,7 +171,8 @@ export function normalizeMarkdownTable(text: string): string | null {
   const separator = table.findIndex((r) => /^\|[\s|:-]+\|$/.test(r));
   if (table.length < 3 || separator !== 1) return null;
   // Model vkládá buňky oddělovače (`:---`) i do záhlaví a datových řádků; zůstane jen druhý řádek.
-  const cells = (r: string) => r.slice(1, -1).split('|').map((c) => c.trim());
+  // Vision model píše indexy a symboly v LaTeXu („0.7894$^a$“, „$F$-test“) stejně jako OCR.
+  const cells = (r: string) => r.slice(1, -1).split('|').map((c) => cleanOcrText(c));
   const isRule = (c: string) => /^:?-{3,}:?$/.test(c);
   const withoutRules = (r: string) => {
     const c = cells(r).filter((x) => !isRule(x));
@@ -268,6 +273,11 @@ function toLines(items: TextItem[]): Line[] {
     .filter((l) => l.text);
 }
 
+/** Úseky řádků textové vrstvy (v tabulce typicky buňky) s polohou; pro sazbu tabulky po buňkách. */
+export function textPieces(items: TextItem[]) {
+  return toLines(items.filter((i) => i.str.trim())).flatMap((l) => l.pieces.map((p) => ({ text: p.text, x0: p.x0, x1: p.x1, y: l.y, h: l.h, serif: l.serif })));
+}
+
 // Dolní medián: u pár řádků by horní medián vzal mezeru mezi odstavci za běžné řádkování.
 function median(values: number[]) {
   const s = [...values].sort((a, b) => a - b);
@@ -292,6 +302,22 @@ function metrics(lines: Line[], pageWidth: number): Metrics {
   return { bodyHeight, textHeight, lineGap: median(gaps.filter((g) => g > 0)) || bodyHeight * 1.2, pageWidth };
 }
 
+/**
+ * Odsazený první řádek odstavce bez mezery nad ním (časopisy oddělují odstavce jen odsazením):
+ * předchozí řádek končí větou nebo je kratší a následující řádek se vrací k levému okraji.
+ */
+function indentedStart(block: Line[], line: Line, next: Line | undefined) {
+  const left = Math.min(...block.map((l) => l.x0));
+  const right = Math.max(...block.map((l) => l.x1));
+  const prev = block[block.length - 1];
+  const indent = line.x0 - left;
+  if (indent < line.h * 0.6 || indent > line.h * 4) return false;
+  // Visící odsazení (seznam literatury): odsazené jsou řádky za prvním, ne první.
+  if (block.slice(1).some((l) => l.x0 > left + line.h * 0.6)) return false;
+  if (next && Math.abs(next.x0 - left) > line.h * 0.5) return false;
+  return SENTENCE_END.test(prev.text) || prev.x1 < right - line.h * 2;
+}
+
 // Metriky se berou z celé stránky: skupina nad sloupci (název článku) by jinak sama sebe brala za běžný text.
 function linesToBlocks(lines: Line[], page: number, { bodyHeight, textHeight, lineGap, pageWidth }: Metrics): Block[] {
   if (!lines.length) return [];
@@ -314,7 +340,12 @@ function linesToBlocks(lines: Line[], page: number, { bodyHeight, textHeight, li
       (gap < line.h * 1.6 || (/^\p{Ll}/u.test(line.text) && gap < line.h * 3));
     const startsNew =
       !headingContinues &&
-      (!current || isHeading || current.kind === 'heading' || gap > lineGap * 1.5 || (isList && current.kind !== 'list'));
+      (!current ||
+        isHeading ||
+        current.kind === 'heading' ||
+        gap > lineGap * 1.5 ||
+        (isList && current.kind !== 'list') ||
+        (current.kind === 'paragraph' && indentedStart(members.get(current)!, line, lines[i + 1])));
     if (startsNew) {
       current = { kind: isHeading ? 'heading' : isList ? 'list' : 'paragraph', text: line.text, page };
       blocks.push(current);
@@ -469,14 +500,21 @@ function tablesWithText(blocks: Block[], real: TextItem[], size: { width: number
       const near = (y: number) => Math.abs(y - row.y) < rowTolerance(row.h);
       return tail.some((l) => near(l.y)) || below.some((o) => o !== c && coverRows(o).some((x) => near(x.y)));
     };
-    const parts: Block[] = [];
-    for (const c of below) {
+    const isTabular = (c: Block) => {
       const rows = coverRows(c);
       // Buňka přes víc řádků (zalomený text v buňce) leží vedle jiné buňky ve stejné výšce.
       // Sloupce článku vedle sebe mají dlouhé řádky, buňky krátké.
       const cell = rows.length === 1 || c.text.length / rows.length < 40;
-      const tabular = (cell && matesRow(c)) || (rows.length > 1 && rows.filter((x) => x.spans > 1).length * 2 >= rows.length);
-      if (c.kind === 'heading' || CAPTION.test(c.text) || !tabular) break;
+      // Krátké štítky pod popiskem tabulky (záhlaví přes víc sloupců, popisek řádku) jsou buňky, ne graf.
+      const columns = rows.length > 1 ? rows.filter((x) => x.spans > 1).length * 2 >= rows.length : (rows[0]?.spans ?? 0) > 2;
+      return (cell && (matesRow(c) || !!c.layoutOnly)) || columns;
+    };
+    const parts: Block[] = [];
+    for (const [i, c] of below.entries()) {
+      if (c.kind === 'heading' || CAPTION.test(c.text)) break;
+      // Krátké záhlaví přes celou šířku („Dependent Variables“) patří k tabulce, když pod ním pokračuje.
+      const header = coverRows(c).length === 1 && c.text.length < 60 && !!below[i + 1] && isTabular(below[i + 1]);
+      if (!isTabular(c) && !header) break;
       parts.push(c);
     }
     // Aspoň jeden víceřádkový blok, nebo hodně buněk vedle sebe (tabulka rozdělená na buňky).
@@ -669,6 +707,26 @@ export function attachLinks(blocks: Block[], links: SegmentLink[]) {
   }
 }
 
+// Starší sazba (Elsevier, Kluwer) mívá ligatury a pomlčky na místě jiných znaků: „signi®cant“, „re¯ecting“, „1960±2000“.
+const BROKEN_LIGATURE = /(?:\p{L}|^|\s)[®¯]\p{Ll}/gu;
+
+/** Opraví posunuté znaky jen v dokumentu, kde se rozbité ligatury opravdu vyskytují. */
+export function fixBrokenEncoding(pages: { items: TextItem[] }[]) {
+  const hits = pages.reduce((n, p) => n + p.items.reduce((m, i) => m + (i.str.match(BROKEN_LIGATURE)?.length ?? 0), 0), 0);
+  if (hits < 3) return;
+  for (const p of pages) {
+    for (const i of p.items) {
+      i.str = i.str
+        .replace(/®(?=\p{Ll})/gu, 'fi')
+        .replace(/¯(?=\p{Ll})/gu, 'fl')
+        .replace(/(?<=\S)±(?=\S)/g, '–')
+        .replace(/(?<=\S)Ð(?=\S)/g, '—')
+        .replace(/``/g, '“')
+        .replace(/''/g, '”');
+    }
+  }
+}
+
 /**
  * Záhlaví a zápatí: krátký text na stejném místě na více stránkách (lišta webu, název časopisu)
  * a samotná čísla stránek u horního nebo dolního okraje. Časopisy střídají živé záhlaví
@@ -677,12 +735,19 @@ export function attachLinks(blocks: Block[], links: SegmentLink[]) {
  */
 export function removePageFurniture(pages: { items: TextItem[]; height: number }[]): TextItem[][] {
   const key = (i: TextItem) => `${i.str.trim()}|${Math.round(i.y / 4)}`;
-  const inMargin = (i: TextItem, height: number) => i.y < height * 0.12 || i.y > height * 0.88;
+  // Okraj se měří od stránky i od prvního a posledního řádku textu (sazba s širokými okraji).
+  const extents = pages.map((p) => {
+    const text = p.items.filter((i) => i.str.trim());
+    return { top: Math.min(...text.map((i) => i.y)), bottom: Math.max(...text.map((i) => i.y + i.h)) };
+  });
+  const atTextEdge = (i: TextItem, n: number, height: number) =>
+    i.y - extents[n].top < height * 0.02 || extents[n].bottom - (i.y + i.h) < height * 0.02;
+  const inMargin = (i: TextItem, n: number, height: number) => i.y < height * 0.12 || i.y > height * 0.88 || atTextEdge(i, n, height);
   const seen = new Map<string, Set<number>>();
   pages.forEach((p, n) => {
     for (const i of p.items) {
       const len = i.str.trim().length;
-      if (!len || len > (inMargin(i, p.height) ? 120 : 60)) continue;
+      if (!len || len > (inMargin(i, n, p.height) ? 120 : 60)) continue;
       if (!seen.has(key(i))) seen.set(key(i), new Set());
       seen.get(key(i))!.add(n);
     }
@@ -692,11 +757,11 @@ export function removePageFurniture(pages: { items: TextItem[]; height: number }
     if (pages.length < 2 || !on) return false;
     if (on.size >= Math.max(2, pages.length / 2)) return true;
     const sameParity = [...on].filter((m) => m % 2 === n % 2).length;
-    return inMargin(i, height) && pages.length >= 4 && sameParity >= Math.max(2, Math.ceil(pages.length / 2) / 2);
+    return inMargin(i, n, height) && pages.length >= 4 && sameParity >= Math.max(2, Math.ceil(pages.length / 2) / 2);
   };
   return pages.map((p, n) =>
     p.items.filter((i) => {
-      const nearEdge = i.y < p.height * 0.07 || i.y > p.height * 0.93;
+      const nearEdge = i.y < p.height * 0.07 || i.y > p.height * 0.93 || atTextEdge(i, n, p.height);
       return !repeated(i, n, p.height) && !(nearEdge && /^\s*\d{1,3}\s*$/.test(i.str));
     }),
   );
@@ -718,32 +783,37 @@ export function dropRepeatedBlocks(blocks: Block[]): Block[] {
 const SENTENCE_END = /[.!?:;…"”'’)\]]$/;
 
 /**
- * Odstavec rozdělený koncem stránky se spojí. Jinak by se obě půlky překládaly zvlášť
- * a model by první dokončil vymyšleným koncem.
+ * Odstavec přerušený koncem stránky, sloupcem nebo vloženým obrázkem či tabulkou se spojí.
+ * Jinak by se obě půlky překládaly zvlášť a model by první dokončil vymyšleným koncem.
  */
 export function mergeAcrossPages(blocks: Block[]): Block[] {
   const out: Block[] = [];
   for (const b of blocks) {
-    const open = b.page !== undefined ? openOnPreviousPage(out, b) : undefined;
+    const open = b.page !== undefined ? openBefore(out, b) : undefined;
     if (open && continuesInto(open, b)) joinInto(open, b);
     else out.push({ ...b });
   }
   return out;
 }
 
+// Odstavec spojený přes stránku má `page` první stránky; navazuje se na poslední.
+const lastPage = (x: Block) => Math.max(x.page ?? 0, ...(x.rects?.map((r) => r.page) ?? []));
+// Celostránkové tabulky mezi půlkami odstavce (časopis je dává na samostatné stránky).
+const MAX_PAGE_GAP = 3;
+
 /**
- * Poslední blok předchozí stránky, na který může `b` navazovat. Přeskočí se popisky, tabulky
- * a krátké štítky grafů na konci předchozí i na začátku stránky `b`.
+ * Nejbližší předchozí blok běžného textu, na který může `b` navazovat. Přeskočí se popisky,
+ * tabulky a štítky grafů mezi nimi. Na téže stránce nebo přes vynechané stránky jen tehdy,
+ * když `b` začíná malým písmenem (pokračování věty), u sousední stránky stačí neukončená věta.
  */
-function openOnPreviousPage(out: Block[], b: Block) {
+function openBefore(out: Block[], b: Block) {
   for (let i = out.length - 1; i >= 0; i--) {
     const x = out[i];
-    if (x.page === b.page) {
-      if (isAside(x, b) || x.text.length < 40) continue;
-      return undefined;
-    }
-    if (x.page !== b.page! - 1) return undefined;
-    if (!isAside(x, b) && x.text.length >= 40) return x;
+    if (isAside(x, b) || x.figure || x.layoutOnly || x.text.length < 40) continue;
+    const gap = b.page! - lastPage(x);
+    if (gap < 0 || gap > MAX_PAGE_GAP) return undefined;
+    if (gap === 1 || /^\p{Ll}/u.test(b.text)) return x;
+    return undefined;
   }
   return undefined;
 }
@@ -829,7 +899,8 @@ export function blocksToSegments(blocks: Block[]): Segment[] {
       id,
       kind: b.kind,
       page: b.page,
-      source: b.text,
+      // Zbytek HTML tabulky od OCR (např. „…10 percent.</table>“) v poznámce pod tabulkou.
+      source: b.kind === 'table' ? b.text : b.text.replace(/<\/?(?:table|thead|tbody|tr|td|th)\b[^>]*>/gi, '').trim(),
       ...(b.warning && { warning: b.warning }),
       ...(b.rects?.length && { rects: b.rects, fontSize: b.fontSize, serif: b.serif, bold: b.bold, centered: b.centered }),
       ...(b.layoutOnly && { layoutOnly: true }),

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TextItem } from '../src/shared/pdf';
 import {
   attachLinks,
+  fixBrokenEncoding,
   linkAnchors,
   blocksToSegments,
   groupSegments,
@@ -43,6 +44,18 @@ describe('parseOcr', () => {
 
   it('odstraní LaTeX zápis procent', () => {
     expect(parseOcr(output, 1)[2].text).toContain('18% lower');
+  });
+
+  it('odstraní LaTeX u indexů poznámek a krátkých výrazů, dolary v textu nechá', () => {
+    const text = (line: string) => parseOcr(`text [1, 2, 3, 4]${line}`, 1)[0].text;
+    expect(text('^{a} Significant at 1 percent. ^b Significant at 5 percent.')).toBe('a Significant at 1 percent. b Significant at 5 percent.');
+    expect(text('Coefficient $-0.4351^b$ and the $F$-test')).toBe('Coefficient -0.4351b and the F-test');
+    expect(text('It costs $5 and $10 per hour.')).toBe('It costs $5 and $10 per hour.');
+  });
+
+  it('zbytek HTML tabulky v obyčejném odstavci zahodí', () => {
+    const [seg] = blocksToSegments([{ kind: 'paragraph', text: 'Notes: significant at 10 percent.</table>' }]);
+    expect(seg.source).toBe('Notes: significant at 10 percent.');
   });
 
   it('převede HTML tabulku na Markdown', () => {
@@ -158,6 +171,11 @@ describe('normalizeMarkdownTable', () => {
   it('spojí řádek zalomený vision modelem (skutečný výstup Gemma 4)', () => {
     const out = '| Group | Average sleep |\n| --- | --- |\n| Short sleepers | \n84 |\n| Long sleepers | 97 |';
     expect(normalizeMarkdownTable(out)).toBe('| Group | Average sleep |\n| --- | --- |\n| Short sleepers | 84 |\n| Long sleepers | 97 |');
+  });
+
+  it('odstraní LaTeX z buněk (skutečný výstup Gemma 4 u Glaesera)', () => {
+    const out = '| | (1) |\n| --- | --- |\n| Years of schooling | 0.7894$^a$ |\n| $F$-Test for excluded | $-0.3432$ |';
+    expect(normalizeMarkdownTable(out)).toBe('|  | (1) |\n| --- | --- |\n| Years of schooling | 0.7894a |\n| F-Test for excluded | -0.3432 |');
   });
 
   it('odmítne odpověď, která není tabulka', () => {
@@ -605,5 +623,148 @@ describe('segmentsToMarkdown', () => {
       { id: 3, kind: 'paragraph', source: 'Jen pro PDF', layoutOnly: true },
     ]);
     expect(md).toBe('Viditelný');
+  });
+});
+
+describe('záhlaví a čísla stránek u širokých okrajů', () => {
+  const wide = (n: number) => ({
+    height: 842,
+    items: [
+      item(n % 2 ? 'DO INSTITUTIONS CAUSE GROWTH?' : 'EDWARD L. GLAESER ET AL.', 84, 125, 260),
+      item(n % 2 ? '273' : '272', 300, 125, 15),
+      item(`Tělo textu na stránce ${n + 1} pokračuje dál.`, 84, 155, 400),
+    ],
+  });
+
+  it('živé záhlaví i číslo stránky zahodí, i když leží dál od okraje než 12 %', () => {
+    const pages = Array.from({ length: 6 }, (_, n) => wide(n));
+    expect(removePageFurniture(pages).map((items) => items.map((i) => i.str))).toEqual(
+      pages.map((_, n) => [`Tělo textu na stránce ${n + 1} pokračuje dál.`]),
+    );
+  });
+});
+
+describe('oprava rozbitého kódování', () => {
+  it('při třech a více rozbitých znacích opraví ligatury, pomlčky i uvozovky', () => {
+    const pages = [
+      {
+        items: [
+          item('signi®cant', 50, 100),
+          item('re¯ecting', 50, 112),
+          item('de®ned', 50, 118),
+          item('1960±2000', 50, 124),
+          item('SingaporeÐreceived', 50, 136),
+          item("``good''", 50, 148),
+        ],
+      },
+    ];
+    fixBrokenEncoding(pages);
+    expect(pages[0].items.map((i) => i.str)).toEqual(['significant', 'reflecting', 'defined', '1960–2000', 'Singapore—received', '“good”']);
+  });
+
+  it('při méně výskytech (jediné Fujifilm®) se nic nemění', () => {
+    const pages = [{ items: [item('Fujifilm®', 50, 100), item('signi®cant', 50, 112)] }];
+    fixBrokenEncoding(pages);
+    expect(pages[0].items.map((i) => i.str)).toEqual(['Fujifilm®', 'signi®cant']);
+  });
+
+  it('„0.5 ± 0.1“ s mezerami se nemění ani v opravovaném dokumentu', () => {
+    const pages = [
+      { items: [item('signi®cant', 50, 100), item('re¯ecting', 50, 112), item('de®ned', 50, 118), item('1960±2000', 50, 124), item('0.5 ± 0.1', 50, 136)] },
+    ];
+    fixBrokenEncoding(pages);
+    expect(pages[0].items.map((i) => i.str)).toEqual(['significant', 'reflecting', 'defined', '1960–2000', '0.5 ± 0.1']);
+  });
+});
+
+describe('spojování odstavců přes stránky a popisky', () => {
+  const longStart = 'Respondenti z obou skupin reagovali na podněty výrazně rychleji a přesněji než kontrolní skupina';
+
+  it('odstavec přerušený na téže stránce popiskem menším písmem se spojí, když pokračuje malým písmenem', () => {
+    const merged = mergeAcrossPages([
+      { kind: 'paragraph', text: longStart, page: 1, fontSize: 10 },
+      { kind: 'paragraph', text: 'Obrázek 2: Výsledky podle věku', page: 1, fontSize: 7 },
+      { kind: 'paragraph', text: 'a pohlaví, jak je uvedeno níže.', page: 1, fontSize: 10 },
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].text).toBe(`${longStart} a pohlaví, jak je uvedeno níže.`);
+    expect(merged[1].text).toBe('Obrázek 2: Výsledky podle věku');
+  });
+
+  it('odstavec spojený přes stránku 1 a 2 pokračuje na stránce 3 (navazuje se na poslední stránku)', () => {
+    const merged = mergeAcrossPages([
+      {
+        kind: 'paragraph',
+        text: longStart,
+        page: 1,
+        rects: [
+          { page: 1, x: 50, y: 700, w: 400, h: 12 },
+          { page: 2, x: 50, y: 60, w: 400, h: 12 },
+        ],
+      },
+      { kind: 'paragraph', text: 'pokračuje na třetí stránce.', page: 3 },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].text).toBe(`${longStart} pokračuje na třetí stránce.`);
+  });
+
+  it('přes dvě stránky s tabulkou se spojí, když pokračování začíná malým písmenem', () => {
+    const merged = mergeAcrossPages([
+      { kind: 'paragraph', text: longStart, page: 1 },
+      { kind: 'table', text: '| A | B |\n| --- | --- |\n| 1 | 2 |', page: 2 },
+      { kind: 'paragraph', text: 'a dál podle tabulky.', page: 3 },
+    ]);
+    expect(merged.map((b) => b.kind)).toEqual(['paragraph', 'table']);
+    expect(merged[0].text).toBe(`${longStart} a dál podle tabulky.`);
+  });
+
+  it('přes dvě stránky s tabulkou se nespojí, když pokračování začíná velkým písmenem', () => {
+    const merged = mergeAcrossPages([
+      { kind: 'paragraph', text: longStart, page: 1 },
+      { kind: 'table', text: '| A | B |\n| --- | --- |\n| 1 | 2 |', page: 2 },
+      { kind: 'paragraph', text: 'Nový odstavec na třetí stránce.', page: 3 },
+    ]);
+    expect(merged.map((b) => b.text)).toEqual([longStart, '| A | B |\n| --- | --- |\n| 1 | 2 |', 'Nový odstavec na třetí stránce.']);
+  });
+
+  it('na téže stránce bez malého písmena na začátku se nespojí', () => {
+    const merged = mergeAcrossPages([
+      { kind: 'paragraph', text: longStart, page: 1 },
+      { kind: 'paragraph', text: 'Další odstavec začíná velkým písmenem.', page: 1 },
+    ]);
+    expect(merged.map((b) => b.text)).toEqual([longStart, 'Další odstavec začíná velkým písmenem.']);
+  });
+});
+
+describe('odsazení prvního řádku jako hranice odstavce', () => {
+  it('odstavec oddělený jen odsazením prvního řádku se rozdělí na dva bloky', () => {
+    const blocks = layoutToBlocks(
+      [
+        item('Výsledky ukazují, že městské prostředí ovlivňuje rozhodování obyvatel a jejich každodenní', 100, 100, 400),
+        item('chování v dlouhodobém horizontu, a to zejména u mladších respondentů.', 100, 112, 400),
+        item('Druhý odstavec začíná odsazeným řádkem a pokračuje dál po levém okraji textu.', 112, 136, 400),
+        item('a končí tečkou na posledním řádku.', 100, 148, 400),
+      ],
+      600,
+      1,
+    );
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].text).toMatch(/respondentů\.$/);
+    expect(blocks[1].text.startsWith('Druhý odstavec')).toBe(true);
+  });
+
+  it('seznam literatury s visícím odsazením se podle odsazení nedělí', () => {
+    const blocks = layoutToBlocks(
+      [
+        item('Adams, J. (2001). Cities and growth in the twentieth century. Journal of Urban', 100, 100, 460),
+        item('Studies, 12, 1–20.', 112, 112, 300),
+        item('Brown, K. (2005). Institutions and housing markets. Review of Economics, 4, 5–9.', 100, 124, 460),
+        item('Quarterly, 8, 33–40.', 112, 136, 300),
+      ],
+      600,
+      1,
+    );
+    expect(blocks.some((b) => b.text.startsWith('Studies'))).toBe(false);
+    expect(blocks.some((b) => b.text.startsWith('Quarterly'))).toBe(false);
   });
 });

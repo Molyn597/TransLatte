@@ -43,6 +43,7 @@ import {
   blocksToSegments,
   dropRepeatedBlocks,
   finalText,
+  fixBrokenEncoding,
   groupSegments,
   layoutToBlocks,
   linkAnchors,
@@ -248,7 +249,8 @@ async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
   }
 }
 
-const geometry = ({ view, rotate, width, height, invisible }: PageGeometry): PageGeometry => ({ view, rotate, width, height, invisible });
+// Textová vrstva zůstane kvůli tabulkám, které se sází po buňkách na místo originálu.
+const geometry = ({ view, rotate, width, height, invisible, items }: PageGeometry): PageGeometry => ({ view, rotate, width, height, invisible, items });
 
 async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segment[]> {
   const { job, settings } = ctx;
@@ -260,6 +262,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
     const texts = [];
     for (const p of selected) texts.push(await pageText(docId, p));
     ctx.pages = new Map(texts.map((text, i) => [selected[i], geometry(text)]));
+    fixBrokenEncoding(texts);
     const content = removePageFurniture(texts);
     const layouts = texts.map(({ items, turned, width, links }, i) => ({
       page: selected[i],
@@ -304,7 +307,8 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       if (bad(result)) {
         if (layout.scanned) warnings.set(p, t('pipeline.ocrErrors'));
         else {
-          result = layout.blocks;
+          // Bez OCR se tabulky hledají stejně jako na stránkách čtených jen z textové vrstvy.
+          result = addUnreadableTables(layout.blocks, layout.items, size);
           // U krátké stránky (zápatí webu, titulní list) na pořadí odstavců nezáleží.
           if (reference.length > 400) {
             warnings.set(p, t('pipeline.ocrMismatch'));
@@ -762,7 +766,10 @@ async function pageGeometries(store: Store, job: Job, segments: Segment[]) {
   const docId = `${job.id}-geometry`;
   await openPdf(docId, new Uint8Array(await readFile(store.inputPath(job))));
   try {
-    for (const p of numbers) pages.set(p, geometry(await pageText(docId, p)));
+    const texts = [];
+    for (const p of numbers) texts.push(await pageText(docId, p));
+    fixBrokenEncoding(texts);
+    texts.forEach((text, i) => pages.set(numbers[i], geometry(text)));
   } finally {
     await closePdf(docId);
   }

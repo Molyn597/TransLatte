@@ -2,10 +2,12 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import fontkit from '@pdf-lib/fontkit';
 import { PDFArray, PDFDict, PDFDocument, PDFName, popGraphicsState, pushGraphicsState, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
+import type { TextItem } from '../shared/pdf';
 import type { Rect, Segment, SegmentLink } from '../shared/types';
-import { ATTEMPTS, firstIndent, flow, isJustified, measuredPitch, type FlowBlock, type Frame, type PlacedLine } from './flow';
+import { ATTEMPTS, PAGE_ATTEMPTS, firstIndent, flow, isJustified, measuredPitch, type FlowBlock, type Frame, type Free, type PlacedLine } from './flow';
 import { hyphenParts } from './hyphenate';
 import { findAnchors, type AnchorRange } from './quality';
+import { textPieces } from './segments';
 
 /** Výřez a otočení stránky z pdf.js; rozměry viewportu při scale 1. */
 export interface PageGeometry {
@@ -15,6 +17,8 @@ export interface PageGeometry {
   height: number;
   /** Neviditelná textová vrstva (OCR nad skenem). */
   invisible?: boolean;
+  /** Textová vrstva stránky; podle ní se tabulka sází po buňkách. */
+  items?: TextItem[];
 }
 
 /** Vykreslená stránka, pixely RGBA po řádcích. */
@@ -30,8 +34,6 @@ type Box = Pick<Rect, 'x' | 'y' | 'w' | 'h'>;
 
 const LINE = 1.2;
 const MIN_SCALE = 0.7;
-// Tabulka nesmí přetéct do textu pod ní, proto se smí zmenšit víc než odstavec.
-const TABLE_MIN_SCALE = 0.5;
 const STEP = 0.05;
 // Plocha přes původní text je o kousek větší, aby nezůstaly okraje písmen.
 const PAD = 1.5;
@@ -51,6 +53,42 @@ const FONT_FILES = {
   serif: 'NotoSerif-Regular.ttf',
   serifBold: 'NotoSerif-Bold.ttf',
 };
+// Noto pro latinku nemá matematické znaky (≤ ≥ ≠ → ∞); ty se vysází záložním písmem.
+const FALLBACK_FONT = 'NotoSansMath-Regular.ttf';
+
+type Run = { text: string; font: PDFFont };
+
+/** Písmo se záložním písmem pro znaky, které hlavní písmo nemá. */
+export class TextFont {
+  constructor(
+    private main: PDFFont,
+    private covers: (code: number) => boolean,
+    private fallback?: PDFFont,
+  ) {}
+
+  runs(text: string): Run[] {
+    const runs: Run[] = [];
+    for (const char of text) {
+      const font = this.fallback && !this.covers(char.codePointAt(0)!) ? this.fallback : this.main;
+      const last = runs[runs.length - 1];
+      if (last?.font === font) last.text += char;
+      else runs.push({ text: char, font });
+    }
+    return runs;
+  }
+
+  widthOfTextAtSize(text: string, size: number) {
+    return this.runs(text).reduce((n, run) => n + run.font.widthOfTextAtSize(run.text, size), 0);
+  }
+
+  draw(page: PDFPage, text: string, options: { x: number; y: number; size: number; color: ReturnType<typeof rgb> }) {
+    let x = options.x;
+    for (const run of this.runs(text)) {
+      page.drawText(run.text, { ...options, x, font: run.font });
+      x += run.font.widthOfTextAtSize(run.text, options.size);
+    }
+  }
+}
 
 /** Obdélník viewportu pdf.js (počátek vlevo nahoře) do souřadnic PDF (počátek vlevo dole, s posunem cropBox). */
 export function toPdfRect(r: Box, view: PageGeometry['view']) {
@@ -147,83 +185,106 @@ export function tableRows(markdown: string): string[][] {
     );
 }
 
-export interface FittedTable {
-  size: number;
-  widths: number[];
-  rows: string[][][];
-  fits: boolean;
-}
+type TextPiece = ReturnType<typeof textPieces>[number];
 
-const CELL_PAD = 2;
-const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
-
-/** Šířky sloupců: nejdelší slovo se vždy vejde, zbytek místa podle délky obsahu. */
-function columnWidths(rows: string[][], cols: number, total: number, size: number, measure: Measure) {
-  const columns = Array.from({ length: cols }, (_, c) => rows.map((r) => r[c] ?? ''));
-  const min = columns.map((cells) => Math.max(0, ...cells.flatMap((t) => t.split(/\s+/).map((w) => measure(w, size)))) + CELL_PAD * 2);
-  const want = columns.map((cells, c) => Math.max(min[c], ...cells.map((t) => measure(t, size) + CELL_PAD * 2)));
-  if (sum(want) <= total) return { widths: want.map((w) => (w * total) / sum(want)), wordsFit: true };
-  if (sum(min) >= total) return { widths: min.map((w) => (w * total) / sum(min)), wordsFit: sum(min) <= total + 0.5 };
-  const flex = sum(want) - sum(min);
-  return { widths: min.map((m, c) => m + ((total - sum(min)) * (want[c] - m)) / flex), wordsFit: true };
-}
-
-/** Začátky sloupců originálu podle úseků řádků; null, když jich není stejně jako sloupců tabulky. */
-export function columnStarts(rect: Pick<Rect, 'x' | 'w' | 'cover'>, cols: number): number[] | null {
-  const xs = [...(rect.cover ?? []).map(([x]) => x)].sort((a, b) => a - b).filter((x, i, all) => !i || x - all[i - 1] > 3);
-  return xs.length === cols && cols > 1 ? xs : null;
-}
+// Zvýraznění z Markdownu (**Celkem**, *Zdroj*) a LaTeX z OCR ($\leq$) se do PDF nekreslí.
+const LATEX: Record<string, string> = { leq: '≤', geq: '≥', le: '≤', ge: '≥', times: '×', pm: '±', neq: '≠', approx: '≈', cdot: '·' };
+const plainCell = (text: string) =>
+  text
+    .replace(/\$?\\(leq|geq|le|ge|times|pm|neq|approx|cdot)\b\$?/g, (_, name: string) => LATEX[name])
+    .replace(/\*\*|__/g, '')
+    .replace(/(^|\s)\*(\S[^*]*\S|\S)\*(?=\s|$)/g, '$1$2')
+    .trim();
+// Párování jen podle písmen: matematické znaky mívá textová vrstva rozbité („≤“ jako řídicí znak, „>“ jako „4“).
+const letters = (text: string) => (plainCell(text).toLowerCase().match(/\p{L}+/gu) ?? []).join('');
 
 /**
- * Mřížka podle počtu sloupců: buňky zalomené ve svém sloupci, řádky pod sebou, zmenšování do 70 %.
- * `starts`: začátky sloupců originálu (x vůči obdélníku), pak se šířky nepočítají.
+ * Buňky tabulky jako samostatné bloky na místě textu originálu (vzor BabelDOC): mřížka, čáry
+ * a čísla zůstanou, přeloží se jen buňky s písmeny. Buňka se v textové vrstvě najde podle písmen;
+ * zalomená buňka se poskládá z úseků pod sebou ve stejném sloupci, úseky bez písmen (čísla, znaky)
+ * přímo pod ní k ní patří. Nenalezená buňka zůstane původní. Obdélník buňky sahá k sousední buňce
+ * vpravo a dolů; kolik z toho se smí využít, rozhodne sazba podle obrázku stránky.
  */
-export function fitTable(
-  rows: string[][],
-  box: Pick<Box, 'w' | 'h'>,
-  start: number,
-  measure: Measure,
-  starts?: number[],
-  rooms?: number[],
-  minScale = TABLE_MIN_SCALE,
-): FittedTable {
-  const cols = Math.max(1, ...rows.map((r) => r.length));
-  let last: FittedTable = { size: start, widths: [], rows: [], fits: false };
-  const fixed = starts?.length === cols ? starts.map((x, c) => (c + 1 < cols ? starts[c + 1] : box.w) - x) : undefined;
-  for (let scale = 1; scale >= minScale - 1e-9; scale -= STEP) {
-    const size = start * scale;
-    const measured = columnWidths(rows, cols, box.w, size, measure);
-    const widths = fixed ?? measured.widths;
-    const wordsFit = fixed ? rows.every((r) => r.every((cell, c) => cell.split(/\s+/).every((w) => measure(w, size) + CELL_PAD * 2 <= fixed[c] + 0.5))) : measured.wordsFit;
-    const wrapped = rows.map((r) => widths.map((w, c) => wrapText(r[c] ?? '', Math.max(1, w - CELL_PAD * 2), size, measure)));
-    const height = wrapped.reduce((n, r) => n + Math.max(1, ...r.map((cell) => cell.length)) * LINE * size, 0);
-    // `rooms`: výška řádků originálu, do které se má vejít každý řádek zvlášť.
-    const rowsFit = !rooms || wrapped.every((r, i) => Math.max(1, ...r.map((cell) => cell.length)) * LINE * size <= rooms[i] + 0.5);
-    last = { size, widths, rows: wrapped, fits: wordsFit && rowsFit && height <= box.h + 0.5 };
-    if (last.fits) break;
-  }
-  return last;
-}
-
-/** Začátky řádků tabulky originálu (y viewportu) podle větších mezer mezi řádky textu. */
-export function rowStarts(rect: Pick<Rect, 'cover'>): number[] {
-  const ys = [...new Set((rect.cover ?? []).map(([, y]) => y))].sort((a, b) => a - b).filter((y, i, all) => !i || y - all[i - 1] > 2);
-  const gaps = ys.slice(1).map((y, i) => y - ys[i]);
-  const step = Math.min(...gaps);
-  return ys.filter((_, i) => !i || gaps[i - 1] > step * 1.5);
-}
-
-/** Horní okraje řádků, když se nedrží řádků originálu: volné místo se rozdělí podle výšky řádků. */
-export function spreadRows(rect: Pick<Rect, 'y' | 'h'>, heights: number[]): number[] {
-  const total = sum(heights);
-  const extra = Math.max(0, rect.h - total);
-  let y = rect.y;
-  return heights.map((h) => {
-    const top = y;
-    y += h + (total ? (extra * h) / total : 0);
-    return top;
+export function tableCells(segment: Segment, translation: string, items: TextItem[]): Segment[] {
+  const rect = segment.rects?.[0];
+  const source = tableRows(segment.source);
+  const target = tableRows(translation);
+  if (!rect || source.length !== target.length || source.some((row, r) => row.length !== target[r].length)) return [];
+  const inside = (p: TextPiece) => {
+    const cx = (p.x0 + p.x1) / 2;
+    const cy = p.y + p.h / 2;
+    return cx >= rect.x - 3 && cx <= rect.x + rect.w + 3 && cy >= rect.y - 3 && cy <= rect.y + rect.h + 3;
+  };
+  const pieces = textPieces(items)
+    .filter(inside)
+    .sort((a, b) => a.y - b.y || a.x0 - b.x0);
+  const used = new Set<TextPiece>();
+  // Další řádek téže buňky: těsně pod posledním úsekem a začíná u jejího levého okraje (nanejvýš odsazený).
+  // Číslo pod širokou buňkou (název panelu přes celou tabulku) patří do dalšího řádku tabulky.
+  const below = (group: TextPiece[], q: TextPiece) => {
+    const last = group[group.length - 1];
+    const x0 = Math.min(...group.map((p) => p.x0));
+    const x1 = Math.max(...group.map((p) => p.x1));
+    return !used.has(q) && !group.includes(q) && q.y > last.y + last.h * 0.3 && q.y < last.y + last.h * 1.6 && q.x0 >= x0 - last.h && q.x0 < Math.min(x1, x0 + last.h * 3);
+  };
+  const find = (key: string) => {
+    for (const start of pieces) {
+      if (used.has(start) || !letters(start.text) || !key.startsWith(letters(start.text))) continue;
+      const group = [start];
+      let acc = letters(start.text);
+      while (acc !== key) {
+        const next = pieces.find((q) => below(group, q) && key.startsWith(acc + letters(q.text)));
+        if (!next) break;
+        group.push(next);
+        acc += letters(next.text);
+      }
+      if (acc !== key) continue;
+      for (let tail = pieces.find((q) => below(group, q) && !letters(q.text)); tail; tail = pieces.find((q) => below(group, q) && !letters(q.text))) group.push(tail);
+      return group;
+    }
+    return undefined;
+  };
+  const found: { group: TextPiece[]; source: string; text: string }[] = [];
+  source.forEach((row, r) =>
+    row.forEach((cell, c) => {
+      const text = plainCell(target[r][c]);
+      const key = letters(cell);
+      if (!key || letters(text) === key) return;
+      const group = find(key);
+      if (!group) return;
+      group.forEach((p) => used.add(p));
+      found.push({ group, source: plainCell(cell), text });
+    }),
+  );
+  return found.map(({ group, source: cellSource, text }) => {
+    const x0 = Math.min(...group.map((p) => p.x0));
+    const x1 = Math.max(...group.map((p) => p.x1));
+    const y0 = Math.min(...group.map((p) => p.y));
+    const y1 = Math.max(...group.map((p) => p.y + p.h * LINE_BOX));
+    const h = median(group.map((p) => p.h)) ?? 8;
+    const others = pieces.filter((p) => !group.includes(p));
+    const right = Math.min(rect.x + rect.w, ...others.filter((p) => p.x0 >= x1 - 1 && p.y < y1 && p.y + p.h > y0).map((p) => p.x0 - h * 0.6));
+    const bottom = Math.min(rect.y + rect.h, ...others.filter((p) => p.y >= y1 - h * 0.5 && p.x0 < right && p.x1 > x0).map((p) => p.y - h * 0.15));
+    const top = Math.max(rect.y, ...others.filter((p) => p.y + p.h <= y0 + h * 0.5 && p.x0 < right && p.x1 > x0).map((p) => p.y + p.h * LINE_BOX));
+    return {
+      ...segment,
+      kind: 'table' as const,
+      source: cellSource,
+      translation: text,
+      polished: undefined,
+      edited: undefined,
+      links: undefined,
+      fontSize: h,
+      serif: majority(group.map((p) => p.serif)) ?? segment.serif,
+      rects: [{ page: rect.page, x: x0, y: Math.min(y0, top), w: Math.max(x1, right) - x0, h: Math.max(y1, bottom) - Math.min(y0, top), cover: group.map((p) => [p.x0, p.y, p.x1 - p.x0, p.h * LINE_BOX] as [number, number, number, number]) }],
+    };
   });
 }
+
+const majority = (values: (boolean | undefined)[]) => {
+  const known = values.filter((v): v is boolean => v !== undefined);
+  return known.length ? known.filter(Boolean).length * 2 >= known.length : undefined;
+};
 
 /** Medián barvy pixelů na obvodu obdélníku (v pixelech obrázku); 0–1 na kanál. */
 export function backgroundColor(image: PageImage, box: Box): Color {
@@ -253,24 +314,7 @@ export function backgroundColor(image: PageImage, box: Box): Color {
 
 const luminance = ([r, g, b]: Color) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-/** Tabulka má v originálu čáru nahoře nebo dole (většina pixelů okraje je tmavá); pak se mřížka po překrytí nakreslí znovu. */
-export function hasRuledEdges(image: PageImage, box: Box): boolean {
-  const x0 = Math.max(0, Math.floor(box.x));
-  const x1 = Math.min(image.width - 1, Math.ceil(box.x + box.w));
-  if (x1 <= x0) return false;
-  const darkRow = (y: number) => {
-    if (y < 0 || y >= image.height) return 0;
-    let dark = 0;
-    for (let x = x0; x <= x1; x++) {
-      const i = (y * image.width + x) * 4;
-      if (luminance([image.data[i] / 255, image.data[i + 1] / 255, image.data[i + 2] / 255]) < 0.5) dark++;
-    }
-    return dark / (x1 - x0 + 1);
-  };
-  // Čára bývá těsně u okraje rámečku z OCR, zkouší se pár řádků pixelů dovnitř i ven.
-  const edge = (y: number) => Math.max(...[-3, -2, -1, 0, 1, 2, 3].map((d) => darkRow(Math.round(y) + d)));
-  return edge(box.y) > 0.6 || edge(box.y + box.h) > 0.6;
-}
+const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
 
 const median = (values: number[]) => {
   const s = [...values].sort((a, b) => a - b);
@@ -515,8 +559,6 @@ export interface Placement {
   segment: Segment;
   rect: Rect;
   color: Color;
-  /** Tabulka měla čáry, které překrytí smazalo. */
-  ruled: boolean;
   /** Pravý okraj sloupce, kam smí jednořádkový text přesáhnout. */
   right: number;
   /** Prázdné místo (body) pod obdélníkem, které smí odstavec využít, než zmenší písmo. */
@@ -566,9 +608,18 @@ export function visiblePart(rect: Rect, geometry: PageGeometry, full: PageImage,
 export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pages: Map<number, PageGeometry>, options: LayoutOptions): Promise<LayoutResult> {
   const doc = await PDFDocument.load(input, { updateMetadata: false });
   doc.registerFontkit(fontkit);
-  const fonts = new Map<keyof typeof FONT_FILES, PDFFont>();
+  const fonts = new Map<keyof typeof FONT_FILES, TextFont>();
+  let fallback: Promise<PDFFont | undefined> | undefined;
   const font = async (key: keyof typeof FONT_FILES) => {
-    if (!fonts.has(key)) fonts.set(key, await doc.embedFont(await readFile(path.join(options.fontsDir, FONT_FILES[key])), { subset: true }));
+    if (!fonts.has(key)) {
+      const data = await readFile(path.join(options.fontsDir, FONT_FILES[key]));
+      const face = fontkit.create(data);
+      fallback ??= readFile(path.join(options.fontsDir, FALLBACK_FONT)).then(
+        (math) => doc.embedFont(math, { subset: true }),
+        () => undefined,
+      );
+      fonts.set(key, new TextFont(await doc.embedFont(data, { subset: true }), (code) => face.hasGlyphForCodePoint(code), await fallback));
+    }
     return fonts.get(key)!;
   };
   const overflow = new Map<Segment, number[]>();
@@ -580,21 +631,65 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     rotated.add(rect.page);
     return false;
   };
-  const items = segments
-    .map((segment) => ({ segment, rects: segment.rects?.filter(usable) ?? [], text: clean(options.text(segment)).trim() }))
+  // Vykreslení stránky se použije pro buňky tabulek i pro plochy, kreslí se jen jednou.
+  const images = new Map<string, Promise<PageImage>>();
+  const pageImage = (page: number, noText: boolean) => {
+    const key = `${page}|${noText}`;
+    if (!images.has(key)) images.set(key, options.pageImage(page, noText));
+    return images.get(key)!;
+  };
+  // Tabulka se nepřekresluje: přeloží se po buňkách, které se vejdou; bez textové vrstvy zůstane původní.
+  // Buňka smí doprava a dolů jen tam, kde v obrázku stránky bez textu není čára ani jiná grafika.
+  const measureCell = async (cell: Segment, geometry: PageGeometry) => {
+    const main = await font(fontKey(cell));
+    const r = cell.rects![0];
+    const cover = r.cover!;
+    const x1 = Math.max(...cover.map(([x, , w]) => x + w));
+    const y0 = Math.min(...cover.map(([, y]) => y));
+    const y1 = Math.max(...cover.map(([, y, , h]) => y + h));
+    const full = await pageImage(r.page, false);
+    const bare = geometry.invisible ? undefined : await pageImage(r.page, true);
+    const px = full.width / geometry.width;
+    const scaled = (b: Box) => ({ x: b.x * px, y: b.y * px, w: b.w * px, h: b.h * px });
+    const color = backgroundColor(full, scaled({ x: r.x, y: y0, w: x1 - r.x, h: y1 - y0 }));
+    const clear = (b: Box) => b.w <= 0.5 || b.h <= 0.5 || !bare || !hasInk(bare, scaled(b), color);
+    const right = clear({ x: x1 + PAD, y: y0, w: r.x + r.w - x1 - PAD, h: y1 - y0 }) ? r.x + r.w : x1;
+    const bottom = clear({ x: r.x, y: y1 + PAD, w: right - r.x, h: r.y + r.h - y1 - PAD }) ? r.y + r.h : y1;
+    const top = clear({ x: r.x, y: r.y, w: right - r.x, h: y0 - PAD - r.y }) ? r.y : y0;
+    // Nejdřív jen do šířky, pak i pod buňku, nakonec i nad ni (záhlaví mívá volno nahoře).
+    for (const [t, b] of [[y0, y1], [y0, bottom], [top, bottom]]) {
+      if (!fitText(clean(cell.translation!), { w: right - r.x, h: b - t }, cell.fontSize!, (text, size) => main.widthOfTextAtSize(text, size)).fits) continue;
+      cell.rects = [{ ...r, y: t, w: right - r.x, h: b - t }];
+      return true;
+    }
+    return false;
+  };
+  const expanded: Segment[] = [];
+  for (const segment of segments) {
+    if (segment.kind !== 'table') {
+      expanded.push(segment);
+      continue;
+    }
+    const geometry = segment.rects?.[0] && usable(segment.rects[0]) ? pages.get(segment.rects[0].page) : undefined;
+    for (const cell of geometry?.items ? tableCells(segment, clean(options.text(segment)), geometry.items) : []) {
+      if (await measureCell(cell, geometry!)) expanded.push(cell);
+    }
+  }
+  const items = expanded
+    .map((segment) => ({ segment, rects: stackRects(segment.rects?.filter(usable) ?? []), text: clean(options.text(segment)).trim() }))
     // Nezměněný text (čísla, ponechaný originál) zůstane v PDF tak, jak byl: jeho písmo nemusí jít znovu vysázet.
     .filter((i) => i.rects.length && i.text && !sameText(i.text, i.segment.source))
     .map((i) => ({ ...i, marks: i.segment.links && i.segment.kind !== 'table' ? wordMarks(i.text, findAnchors(i.text, i.segment.links, i.segment.source)) : [] }));
   const styles = new Map<SegmentLink, LinkStyle>();
 
   // Viditelnost a barva pozadí stránku po stránce (vykreslení se hned zahodí).
-  const shown = new Map<Rect, { rect: Rect; color: Color; ruled: boolean; room: number; below: number; ink?: Color; anchored: boolean }>();
+  const shown = new Map<Rect, { rect: Rect; color: Color; room: number; below: number; ink?: Color; anchored: boolean }>();
   // Stránky bez textu: kam překlad nesmí (obrázky, odrážky, čáry).
   const graphics = new Map<number, PageImage>();
   for (const number of [...new Set(items.flatMap((i) => i.rects.map((r) => r.page)))].sort((a, b) => a - b)) {
     const geometry = pages.get(number)!;
-    const full = await options.pageImage(number, false);
-    const bare = geometry.invisible ? full : await options.pageImage(number, true);
+    const full = await pageImage(number, false);
+    const bare = geometry.invisible ? full : await pageImage(number, true);
     if (!geometry.invisible) graphics.set(number, bare);
     const px = full.width / geometry.width;
     for (const link of items.flatMap((i) => i.segment.links ?? [])) {
@@ -612,7 +707,6 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
       shown.set(rect, {
         rect: visible,
         color,
-        ruled: table && !rect.cover && hasRuledEdges(full, { x: rect.x * px, y: rect.y * px, w: rect.w * px, h: rect.h * px }),
         room: flowing ? blankBelow(full, visible, color, px) : 0,
         below: table ? 0 : blankBelow(full, visible, color, px, geometry.height),
         ink: first && !geometry.invisible ? inkColor(full, { x: first[0] * px, y: first[1] * px, w: first[2] * px, h: first[3] * px }) : undefined,
@@ -628,9 +722,9 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     const parts = segment.kind === 'table' ? [text, ...visible.slice(1).map(() => '')] : splitText(text, visible.map((r) => r.chars ?? r.w * r.h));
     let firstWord = 0;
     visible.forEach((original, i) => {
-      const { rect, color, ruled, room, below, ink, anchored } = shown.get(original)!;
+      const { rect, color, room, below, ink, anchored } = shown.get(original)!;
       if (!byPage.has(rect.page)) byPage.set(rect.page, []);
-      byPage.get(rect.page)!.push({ segment, rect, color, ruled, right: rect.x + rect.w, room, below, ink, anchored, text: parts[i], firstWord, marks });
+      byPage.get(rect.page)!.push({ segment, rect, color, right: rect.x + rect.w, room, below, ink, anchored, text: parts[i], firstWord, marks });
       firstWord += parts[i].split(/\s+/).filter(Boolean).length;
     });
   }
@@ -646,8 +740,10 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     isolate(doc, page);
     // Sloupec: obdélníky na stejné stránce začínající na stejném x.
     // Štítek diagramu zůstane ve svém rámečku.
-    for (const p of placements.filter((o) => !o.segment.figure)) {
-      p.right = Math.max(p.right, ...placements.filter((o) => !o.segment.figure && Math.abs(o.rect.x - p.rect.x) < 6).map((o) => o.rect.x + o.rect.w));
+    // Buňka tabulky má volné místo spočítané předem, sloupec článku ji nerozšíří.
+    const inColumn = (o: Placement) => !o.segment.figure && o.segment.kind !== 'table';
+    for (const p of placements.filter(inColumn)) {
+      p.right = Math.max(p.right, ...placements.filter((o) => inColumn(o) && Math.abs(o.rect.x - p.rect.x) < 6).map((o) => o.rect.x + o.rect.w));
     }
     // Nejdřív všechny plochy, pak text: plocha sousedního bloku nesmí překrýt už vepsaný překlad.
     for (const placement of placements) {
@@ -668,6 +764,21 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     };
     const chains = pageChains(placements).map((frames) => ({ frames }));
     const flowed = new Set(chains.flatMap((c) => c.frames.flatMap((f) => f.members)));
+    // Po sobě jdoucí části téhož odstavce (obtéká obrázek, pokračuje v dalším sloupci) tečou jako jeden text,
+    // jinak by přetečení první části a začátek druhé oddělila mezera odstavce.
+    const flowText = new Map<Placement, string>();
+    for (const chain of chains) {
+      let head: Placement | undefined;
+      for (const p of chain.frames.flatMap((f) => f.members)) {
+        if (head?.segment === p.segment) {
+          flowText.set(head, `${flowText.get(head)} ${p.text}`.trim());
+          flowText.set(p, '');
+        } else {
+          head = p;
+          flowText.set(p, p.text);
+        }
+      }
+    }
     const prepared = await Promise.all(
       chains.map(async (chain) => ({
         chain,
@@ -679,7 +790,7 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
               const cover = p.rect.cover ?? [];
               const s = style.get(!!p.segment.serif);
               return {
-                text: p.text,
+                text: flowText.get(p) ?? p.text,
                 frame: k,
                 x: p.rect.x,
                 w: frame.x + frame.w - p.rect.x,
@@ -700,7 +811,18 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     );
     const bare = graphics.get(number) && paintCovers(graphics.get(number)!, placements, geometry);
     const bpx = bare ? bare.width / geometry.width : 1;
+    // Text, který zůstane původní (nepřeložené buňky, čísla), je v obrázku bez textu neviditelný, ale překážkou je.
+    const covered = (i: TextItem) =>
+      placements.some((p) =>
+        (p.rect.cover ?? [[p.rect.x, p.rect.y, p.rect.w, p.rect.h]]).some(([x, y, w, h]) => {
+          const cx = i.x + i.w / 2;
+          const cy = i.y + i.h / 2;
+          return cx >= x - PAD && cx <= x + w + PAD && cy >= y - PAD && cy <= y + h + PAD;
+        }),
+      );
+    const obstacles = (geometry.invisible ? [] : (geometry.items ?? [])).filter((i) => i.str.trim() && !covered(i));
     const free = (members: Placement[]) => (block: number, x: number, y: number, w: number, h: number) => {
+      if (obstacles.some((o) => o.x < x + w && o.x + o.w > x && o.y < y + h && o.y + o.h > y)) return false;
       if (!bare) return true;
       const own = members[block].rect;
       // Vlastní původní plocha bloku se nekontroluje (grafika uvnitř bloku k němu patří).
@@ -710,18 +832,42 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
       ].filter(([a, b]) => b - a > 0.5);
       return parts.every(([a, b]) => !hasInk(bare, { x: x * bpx, y: a * bpx, w: w * bpx, h: (b - a) * bpx }, members[block].color));
     };
+    const textLeft = Math.min(geometry.width, ...(geometry.items ?? []).map((i) => i.x));
+    const textRight = Math.max(0, ...(geometry.items ?? []).map((i) => i.x + i.w));
+    // Plocha mimo vlastní blok je volná: bez cizího bloku, nepřeloženého textu a grafiky.
+    const clearArea = (box: Box, own: Placement) =>
+      box.w > 0.5 &&
+      !placements.some((o) => o !== own && o.rect.x < box.x + box.w && o.rect.x + o.rect.w > box.x && o.rect.y < box.y + box.h && o.rect.y + o.rect.h > box.y) &&
+      !obstacles.some((o) => o.x < box.x + box.w && o.x + o.w > box.x && o.y < box.y + box.h && o.y + o.h > box.y) &&
+      (!bare || !hasInk(bare, { x: box.x * bpx, y: box.y * bpx, w: box.w * bpx, h: box.h * bpx }, own.color));
+    // Samostatný blok (popisek přes šířku stránky), který přetéká, se smí rozšířit doprava do volného místa
+    // až k pravému okraji textu stránky: bez textu, grafiky a jiných bloků (vzor BabelDOC).
+    const widen = (chain: ChainFrame[], blocks: FlowBlock[], check: Free) => {
+      const [frame] = chain;
+      if (chain.length !== 1 || frame.members.length !== 1) return false;
+      const p = frame.members[0];
+      const box = { x: frame.x + frame.w + COLUMN_GAP / 2, y: p.rect.y, w: textRight - frame.x - frame.w - COLUMN_GAP / 2, h: p.rect.h };
+      if (box.w < 4 || !clearArea(box, p) || !check(0, box.x, box.y, box.w, box.h)) return false;
+      frame.w = textRight - frame.x;
+      blocks[0].w = frame.x + frame.w - p.rect.x;
+      return true;
+    };
     // Pro každý řetěz první pokus, při kterém se vejde (jinak poslední).
     const fitted = prepared.map(({ chain, blocks }) => {
       const check = free(chain.frames.flatMap((f) => f.members));
-      for (const [i, attempt] of ATTEMPTS.entries()) {
-        const result = flow(blocks, chain.frames, attempt, check);
-        if (!result.overflow || i === ATTEMPTS.length - 1) return { attempt: i, result };
-      }
-      throw new Error('unreachable');
+      const attempt = () => {
+        for (const [i, options] of ATTEMPTS.entries()) {
+          const result = flow(blocks, chain.frames, options, check);
+          if (!result.overflow || i === ATTEMPTS.length - 1) return { attempt: i, result };
+        }
+        throw new Error('unreachable');
+      };
+      const first = attempt();
+      return first.result.overflow && widen(chain.frames, blocks, check) ? attempt() : first;
     });
     // Odstavcový text celé stránky (všechny sloupce) dostane stejné zmenšení; krátké bloky zvlášť.
     const body = (c: number) => prepared[c].chain.frames.some((f) => f.members.some((p) => p.segment.kind === 'paragraph' && rows(p.rect.cover) >= 3));
-    const pageAttempt = Math.max(-1, ...fitted.filter((_, c) => body(c)).map((f) => f.attempt));
+    const pageAttempt = Math.max(-1, ...fitted.filter((_, c) => body(c)).map((f) => Math.min(f.attempt, PAGE_ATTEMPTS - 1)));
     const results = fitted.map(({ attempt, result }, c) =>
       body(c) && attempt < pageAttempt
         ? flow(prepared[c].blocks, prepared[c].chain.frames, ATTEMPTS[pageAttempt], free(prepared[c].chain.frames.flatMap((f) => f.members)))
@@ -739,101 +885,66 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
     }
     for (const placement of placements) {
       if (!placement.text || flowed.has(placement)) continue;
-      const { segment, rect, color: background, ruled, right, room, text, firstWord, marks } = placement;
+      const { segment, rect, color: background, right, room, text, firstWord, marks } = placement;
       const color = luminance(background) < 0.5 ? rgb(1, 1, 1) : rgb(0, 0, 0);
       const regular = await font(segment.serif ? 'serif' : 'sans');
       const bold = await font(segment.serif ? 'serifBold' : 'sansBold');
       const main = segment.bold || segment.kind === 'heading' ? bold : regular;
       const top = geometry.view[3] - rect.y;
-      const x = geometry.view[0] + rect.x;
       const own = segment.fontSize ?? bodySize ?? 10;
       const size = segment.kind === 'paragraph' && bodySize ? Math.min(Math.max(own, bodySize * 0.9), bodySize * 1.1) : own;
-      let fits: boolean;
-      if (segment.kind === 'table') {
-        const rows = tableRows(text);
-        const start = Math.min(size, rect.h / Math.max(1, rows.length) / LINE);
-        const grid = rows.length ? rows : [[text]];
-        const measure: Measure = (t, s) => bold.widthOfTextAtSize(t, s);
-        // Nejradši do sloupců i řádků originálu, pak jen do sloupců, nakonec s vlastními šířkami.
-        const columns = columnStarts(rect, Math.max(...grid.map((r) => r.length)))?.map((sx) => sx - rect.x);
-        const anchors = rowStarts(rect);
-        const rooms = anchors.length === grid.length ? anchors.map((y, i) => (anchors[i + 1] ?? rect.y + rect.h) - y) : undefined;
-        const attempts: [number[] | undefined, number[] | undefined][] = [[columns, rooms], [columns, undefined], [undefined, undefined]];
-        let table = fitTable(grid, rect, start, measure, ...attempts[0]);
-        let [starts, anchored] = attempts[0];
-        for (const [c, r] of attempts.slice(1)) {
-          if (table.fits) break;
-          if (c === starts && r === anchored) continue;
-          const next = fitTable(grid, rect, start, measure, c, r);
-          if (next.fits || !c) [table, starts, anchored] = [next, c, r];
+      // Jednořádkový nadpis smí do volného místa ve sloupci, než by se zmenšoval.
+      const single = rect.h < size * 2.2 && !segment.centered;
+      // Volné místo pod odstavcem se využije dřív, než se písmo zmenší; mezera k dalšímu bloku zůstane.
+      const extra = Math.max(0, room - size * 0.8);
+      const measure: Measure = (t, s) => main.widthOfTextAtSize(t, s);
+      let fitted = fitText(text, { w: rect.w, h: rect.h + extra }, size, measure, single ? right - rect.x : undefined);
+      let area = { x: rect.x, w: rect.w };
+      if (!fitted.fits) {
+        // Nevejde se: do volného místa po stranách až k okrajům textu stránky (na střed na obě strany).
+        const left = segment.centered ? Math.min(rect.x, textLeft) : rect.x;
+        const sides = [
+          { x: left, y: rect.y, w: rect.x - left - PAD, h: rect.h },
+          { x: rect.x + rect.w + PAD, y: rect.y, w: textRight - rect.x - rect.w - PAD, h: rect.h },
+        ];
+        const wide = { x: left, w: textRight - left };
+        if (wide.w > rect.w + 4 && sides.every((b) => b.w <= 0.5 || clearArea(b, placement))) {
+          const wider = fitText(text, { w: wide.w, h: rect.h + extra }, size, measure);
+          if (wider.fits) [fitted, area] = [wider, wide];
         }
-        fits = table.fits;
-        const heights = table.rows.map((cells) => Math.max(1, ...cells.map((lines) => lines.length)) * LINE * table.size);
-        const tops = anchored ? anchors : table.fits ? spreadRows(rect, heights) : heights.map((_, r) => rect.y + sum(heights.slice(0, r)));
-        table.rows.forEach((cells, r) => {
-          let cx = x + (starts?.[0] ?? 0);
-          const y = geometry.view[3] - tops[r];
-          cells.forEach((lines, c) => {
-            lines.forEach((line, l) =>
-              page.drawText(line, { x: cx + CELL_PAD, y: y - table.size * (0.85 + l * LINE), size: table.size, font: r === 0 ? bold : regular, color }),
-            );
-            cx += table.widths[c];
-          });
-        });
-        if (ruled && table.fits) {
-          const line = { thickness: 0.6, color: luminance(background) < 0.5 ? rgb(0.85, 0.85, 0.85) : rgb(0.25, 0.25, 0.25) };
-          const left = x + (starts?.[0] ?? 0);
-          const width = sum(table.widths);
-          const bottom = geometry.view[3] - (rect.y + rect.h);
-          for (const t of [...tops, rect.y + rect.h]) {
-            const y = geometry.view[3] - t;
-            page.drawLine({ start: { x: left, y }, end: { x: left + width, y }, ...line });
-          }
-          let cx = left;
-          for (const w of [0, ...table.widths]) {
-            cx += w;
-            page.drawLine({ start: { x: cx, y: geometry.view[3] - rect.y }, end: { x: cx, y: bottom }, ...line });
-          }
-        }
-      } else {
-        // Jednořádkový nadpis smí do volného místa ve sloupci, než by se zmenšoval.
-        const single = rect.h < size * 2.2 && !segment.centered;
-        // Volné místo pod odstavcem se využije dřív, než se písmo zmenší; mezera k dalšímu bloku zůstane.
-        const extra = Math.max(0, room - size * 0.8);
-        const fitted = fitText(text, { w: rect.w, h: rect.h + extra }, size, (t, s) => main.widthOfTextAtSize(t, s), single ? right - rect.x : undefined);
-        fits = fitted.fits;
-        let word = firstWord;
-        fitted.lines.forEach((line, l) => {
-          const indent = segment.centered ? Math.max(0, (rect.w - main.widthOfTextAtSize(line, fitted.size)) / 2) : 0;
-          const words = line.split(' ');
-          const lineMarks = marks.slice(word, word + words.length);
-          word += words.length;
-          const y = top - fitted.size * (0.85 + l * LINE);
-          if (!lineMarks.some((m) => m.some((v) => v !== undefined))) {
-            page.drawText(line, { x: x + indent, y, size: fitted.size, font: main, color });
-            return;
-          }
-          // Řádek s odkazem se kreslí po úsecích, odkaz ve své barvě a případně podtržený.
-          let cx = x + indent;
-          for (const run of lineRuns(words, lineMarks)) {
-            const width = main.widthOfTextAtSize(run.text, fitted.size);
-            const link = run.link === undefined ? undefined : segment.links![run.link];
-            const style = link && styles.get(link);
-            const ink = style?.color ? rgb(...style.color) : color;
-            page.drawText(run.text, { x: cx, y, size: fitted.size, font: main, color: ink });
-            if (link) {
-              if (style?.underline) {
-                const uy = y - fitted.size * 0.12;
-                page.drawLine({ start: { x: cx, y: uy }, end: { x: cx + width, y: uy }, thickness: Math.max(0.5, fitted.size * 0.06), color: ink });
-              }
-              if (!pieces.has(link)) pieces.set(link, []);
-              pieces.get(link)!.push({ page: number, x: cx, y: y - fitted.size * 0.25, width, height: fitted.size * 1.15 });
-            }
-            cx += width;
-          }
-        });
       }
-      if (!fits) overflow.set(segment, [...new Set([...(overflow.get(segment) ?? []), number])]);
+      const x = geometry.view[0] + area.x;
+      let word = firstWord;
+      fitted.lines.forEach((line, l) => {
+        const indent = segment.centered ? Math.max(0, (area.w - main.widthOfTextAtSize(line, fitted.size)) / 2) : 0;
+        const words = line.split(' ');
+        const lineMarks = marks.slice(word, word + words.length);
+        word += words.length;
+        const y = top - fitted.size * (0.85 + l * LINE);
+        if (!lineMarks.some((m) => m.some((v) => v !== undefined))) {
+          main.draw(page, line, { x: x + indent, y, size: fitted.size, color });
+          return;
+        }
+        // Řádek s odkazem se kreslí po úsecích, odkaz ve své barvě a případně podtržený.
+        let cx = x + indent;
+        for (const run of lineRuns(words, lineMarks)) {
+          const width = main.widthOfTextAtSize(run.text, fitted.size);
+          const link = run.link === undefined ? undefined : segment.links![run.link];
+          const style = link && styles.get(link);
+          const ink = style?.color ? rgb(...style.color) : color;
+          main.draw(page, run.text, { x: cx, y, size: fitted.size, color: ink });
+          if (link) {
+            if (style?.underline) {
+              const uy = y - fitted.size * 0.12;
+              page.drawLine({ start: { x: cx, y: uy }, end: { x: cx + width, y: uy }, thickness: Math.max(0.5, fitted.size * 0.06), color: ink });
+            }
+            if (!pieces.has(link)) pieces.set(link, []);
+            pieces.get(link)!.push({ page: number, x: cx, y: y - fitted.size * 0.25, width, height: fitted.size * 1.15 });
+          }
+          cx += width;
+        }
+      });
+      if (!fitted.fits) overflow.set(segment, [...new Set([...(overflow.get(segment) ?? []), number])]);
     }
   }
   moveLinks(doc, pages, byPage, pieces);
@@ -841,6 +952,30 @@ export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pag
 }
 
 type Piece = { page: number; x: number; y: number; width: number; height: number };
+
+/**
+ * Části bloku těsně pod sebou ve stejném sloupci (popisek spojený s pokračováním na dalším řádku)
+ * se sázejí jako jeden obdélník, jinak by první část při rozšíření dolů překryla druhou.
+ */
+export function stackRects(rects: Rect[]): Rect[] {
+  const out: Rect[] = [];
+  for (const r of rects) {
+    const last = out[out.length - 1];
+    const gap = last ? r.y - (last.y + last.h) : Infinity;
+    if (last && last.page === r.page && gap > -1 && gap < Math.min(last.h, r.h) * 0.8 && overlapX(last, r) > Math.min(last.w, r.w) * 0.5) {
+      const x = Math.min(last.x, r.x);
+      out[out.length - 1] = {
+        ...last,
+        x,
+        w: Math.max(last.x + last.w, r.x + r.w) - x,
+        h: r.y + r.h - last.y,
+        chars: (last.chars ?? 0) + (r.chars ?? 0) || undefined,
+        cover: last.cover || r.cover ? [...(last.cover ?? [[last.x, last.y, last.w, last.h]]), ...(r.cover ?? [[r.x, r.y, r.w, r.h]])] : undefined,
+      };
+    } else out.push(r);
+  }
+  return out;
+}
 
 const sameText = (a: string, b: string) => clean(a).replace(/\s+/g, '') === clean(b).replace(/\s+/g, '');
 
@@ -936,7 +1071,7 @@ interface TextStyle {
 }
 
 /** Vlastnosti sazby originálu zvlášť pro patkové a bezpatkové písmo, z celých odstavců o aspoň třech řádcích. */
-async function documentStyle(placements: Placement[], fontFor: (serif: boolean) => Promise<PDFFont>): Promise<Map<boolean, TextStyle>> {
+async function documentStyle(placements: Placement[], fontFor: (serif: boolean) => Promise<TextFont>): Promise<Map<boolean, TextStyle>> {
   const samples = new Map<boolean, { width: number[]; pitch: number[]; justified: number }>();
   for (const p of placements) {
     const cover = p.rect.cover;
@@ -969,7 +1104,7 @@ function drawFlowLine(
   geometry: PageGeometry,
   line: PlacedLine,
   p: Placement,
-  font: PDFFont,
+  font: TextFont,
   color: ReturnType<typeof rgb>,
   styles: Map<SegmentLink, LinkStyle>,
   pieces: Map<SegmentLink, Piece[]>,
@@ -992,7 +1127,7 @@ function drawFlowLine(
       const link = run.link === undefined ? undefined : p.segment.links?.[run.link];
       const style = link && styles.get(link);
       const ink = style?.color ? rgb(...style.color) : color;
-      page.drawText(run.text, { x: cx, y, size: line.size, font, color: ink });
+      font.draw(page, run.text, { x: cx, y, size: line.size, color: ink });
       if (link) {
         const list = pieces.get(link) ?? [];
         const prev = list[list.length - 1];

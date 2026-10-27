@@ -202,6 +202,8 @@ export function flow(blocks: FlowBlock[], frames: Frame[], o: FlowOptions, free?
   };
 
   blocks.forEach((b, i) => {
+    // Část textu sloučená do předchozího bloku.
+    if (!b.text.trim()) return;
     const size = b.size * o.scale;
     const pitch = linePitch(b, o);
     const box = size * LINE_BOX;
@@ -215,6 +217,8 @@ export function flow(blocks: FlowBlock[], frames: Frame[], o: FlowOptions, free?
       // Původní mezera jen mezi bloky téhož rámu; za přetečeným textem z jiného sloupce mezera odstavce.
       const gap = prev.frame === b.frame ? Math.max(0, b.top - prev.bottom) : b.indent > 0 ? 0 : size * PARAGRAPH_GAP;
       y = prevBottom + gap * (prev.frame === b.frame ? o.scale : 1);
+      // Krátký blok na konci rámu (popisek pod odstavcem) se vejde zmenšením mezery, nepřeskočí do dalšího rámu.
+      if (y + box > frames[f].bottom + 0.5) y = Math.max(prevBottom + (y - prevBottom) / 3, frames[f].bottom - box);
     }
 
     if (b.keepWithNext && blocks[i + 1]) {
@@ -266,12 +270,16 @@ export function flow(blocks: FlowBlock[], frames: Frame[], o: FlowOptions, free?
   return { lines, overflow };
 }
 
-/** Kroky zkoušení: nejdřív původní vzhled, pak hustší řádkování, pak menší písmo (nejvýš na 85 %). */
+/** Kroky zkoušení: nejdřív původní vzhled, pak hustší řádkování, pak menší písmo (celá stránka nejvýš na 85 %, jeden blok na 70 %). */
 export const ATTEMPTS: FlowOptions[] = [
   { scale: 1, leading: 1 },
   { scale: 1, leading: 0.92 },
   ...[0.97, 0.94, 0.91, 0.88, 0.85].map((scale) => ({ scale, leading: 0.92 })),
+  // Dál se zmenšuje jen blok, který by jinak přetekl přes obsah pod ním (stránka zůstane na 85 %).
+  ...[0.81, 0.77, 0.73, 0.7].map((scale) => ({ scale, leading: 0.92 })),
 ];
+/** Pokusy, které se při stejném zmenšení celé stránky použijí pro všechny odstavce. */
+export const PAGE_ATTEMPTS = 7;
 
 /** Rozestup řádků podle ploch řádků v originálu (medián rozdílu horních okrajů); bez víc řádků undefined. */
 export function measuredPitch(cover: [number, number, number, number][]): number | undefined {
