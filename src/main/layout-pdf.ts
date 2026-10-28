@@ -605,8 +605,19 @@ export function visiblePart(rect: Rect, geometry: PageGeometry, full: PageImage,
   return { ...rect, y: top, h: bottom - top, cover: shown };
 }
 
+/**
+ * PDF se zákazem úprav (šifrované bez hesla k otevření, např. MIT SMR) pdf-lib nenačte;
+ * fork @cantoo/pdf-lib ho umí rozšifrovat prázdným heslem.
+ */
+export async function decryptPdf(input: Uint8Array): Promise<Uint8Array> {
+  const probe = await PDFDocument.load(input, { ignoreEncryption: true, updateMetadata: false });
+  if (!probe.isEncrypted) return input;
+  const { PDFDocument: Decrypting } = await import('@cantoo/pdf-lib');
+  return (await Decrypting.load(input, { password: '', updateMetadata: false })).save();
+}
+
 export async function buildLayoutPdf(input: Uint8Array, segments: Segment[], pages: Map<number, PageGeometry>, options: LayoutOptions): Promise<LayoutResult> {
-  const doc = await PDFDocument.load(input, { updateMetadata: false });
+  const doc = await PDFDocument.load(await decryptPdf(input), { updateMetadata: false });
   doc.registerFontkit(fontkit);
   const fonts = new Map<keyof typeof FONT_FILES, TextFont>();
   let fallback: Promise<PDFFont | undefined> | undefined;
