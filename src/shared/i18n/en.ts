@@ -321,6 +321,8 @@ export const en: Record<keyof typeof cs, Message> = {
   'review.genderFemale': 'The author is a woman, but the translation uses the masculine gender: {words}.',
   'review.genderMale': 'The author is a man, but the translation uses the feminine gender: {words}.',
   'home.pickParagraphs': 'Choose paragraphs before translating',
+  'home.keepFigures': 'Tables and figures from the original',
+  'home.keepFiguresHint': 'Tables and figures with a caption (Table 1, Figure 2…) are not translated but inserted as an image from the original; only the caption is translated.',
   'home.pickParagraphsHint': 'After the document is read, you choose which paragraphs get translated.',
   'detail.skipped': 'Not translated – the original stays in the PDF',
   'pick.count': '{selected} of {total} paragraphs selected · {chars} characters',

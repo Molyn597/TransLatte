@@ -20,6 +20,7 @@ const api: Api = {
   listJobs: () => ipcRenderer.invoke('jobs'),
   getJob: (id) => ipcRenderer.invoke('job', id),
   readInput: (id) => ipcRenderer.invoke('job-input', id),
+  jobFigure: (id, file) => ipcRenderer.invoke('job-figure', id, file),
   readOutputPdf: (id) => ipcRenderer.invoke('job-output-pdf', id),
   cancelJob: (id) => ipcRenderer.invoke('job-cancel', id),
   retryJob: (id, mode) => ipcRenderer.invoke('job-retry', id, mode),

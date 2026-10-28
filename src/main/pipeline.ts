@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { nativeImage } from 'electron';
 import mammoth from 'mammoth';
@@ -10,7 +10,7 @@ import type { DocumentContext, GlossaryEntry, Job, Models, Progress, Rates, Regi
 import { selectPages } from '../shared/pages';
 import { findRegion, normalizeCrop, pendingSegments } from '../shared/regions';
 import { documentOrder, rewriteDates, type DateOrder } from './dates';
-import { buildDocx } from './docx';
+import { buildDocx, loadFigures } from './docx';
 import { buildLayoutPdf, type PageGeometry, type PageImage } from './layout-pdf';
 import { readKey } from './keystore';
 import { chat, complete, ensureModel, ensureServer, isVisionModel, type ChatContent } from './lmstudio';
@@ -47,6 +47,7 @@ import {
   blocksToSegments,
   dropRepeatedBlocks,
   finalText,
+  findFigureRegions,
   fixBrokenEncoding,
   groupSegments,
   layoutToBlocks,
@@ -249,6 +250,82 @@ async function ocrPage(ctx: JobContext, docId: string, page: number, scale: numb
 const blocksText = (blocks: Block[]) => blocks.map((b) => b.text).join('\n');
 
 
+const FIGURE_SCALE = 3;
+
+/**
+ * Ohraničení tmavých pixelů (inkoustu) ve výřezu; prázdný výřez = undefined. Pás písma useknutý
+ * okrajem výřezu (spodek řádku popisku nad tabulkou) se vynechá, tenká čára tabulky ne.
+ * U okraje stránky se vynechá i osamělý řádek záhlaví či čísla stránky.
+ */
+function inkBounds(image: Electron.NativeImage, edge: { top: boolean; bottom: boolean }) {
+  const { width, height } = image.getSize();
+  const data = image.toBitmap();
+  const rows: number[] = [];
+  let x0 = width;
+  let x1 = -1;
+  const columns = (y: number) => {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i] + data[i + 1] + data[i + 2] > 600) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+    }
+  };
+  for (let y = 0; y < height; y++) {
+    let ink = 0;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i] + data[i + 1] + data[i + 2] <= 600) ink++;
+    }
+    rows.push(ink);
+  }
+  const runs: [number, number][] = [];
+  rows.forEach((ink, y) => {
+    if (!ink) return;
+    const last = runs[runs.length - 1];
+    if (last && last[1] === y - 1) last[1] = y;
+    else runs.push([y, y]);
+  });
+  // Čára tabulky vede přes většinu šířky, useknuté písmo ne.
+  const cut = (run: [number, number]) => run[1] - run[0] < 10 * FIGURE_SCALE && Math.max(...rows.slice(run[0], run[1] + 1)) < width * 0.5;
+  const near = 2 * FIGURE_SCALE;
+  if (runs.length > 1 && runs[0][0] <= near && cut(runs[0])) runs.shift();
+  if (runs.length > 1 && runs[runs.length - 1][1] >= height - 1 - near && cut(runs[runs.length - 1])) runs.pop();
+  const line = (run: [number, number]) => run[1] - run[0] < 14 * FIGURE_SCALE;
+  const gap = 10 * FIGURE_SCALE;
+  if (edge.top && runs.length > 1 && line(runs[0]) && runs[1][0] - runs[0][1] > gap) runs.shift();
+  if (edge.bottom && runs.length > 1 && line(runs[runs.length - 1]) && runs[runs.length - 1][0] - runs[runs.length - 2][1] > gap) runs.pop();
+  if (!runs.length) return undefined;
+  const y0 = runs[0][0];
+  const y1 = runs[runs.length - 1][1];
+  for (let y = y0; y <= y1; y++) if (rows[y]) columns(y);
+  return { x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1 };
+}
+
+/** Tabulky a grafy s popiskem se uloží jako výřez originálu; jejich text se nepřekládá ani neopravuje. */
+async function snapshotFigures(ctx: JobContext, docId: string, blocks: Block[]) {
+  const sizes = new Map([...(ctx.pages ?? [])].map(([page, g]) => [page, { width: g.width, height: g.height }]));
+  const dir = path.join(ctx.store.jobDir(ctx.job.id), 'figures');
+  for (const [i, region] of findFigureRegions(blocks, sizes).entries()) {
+    check(ctx.signal);
+    const size = sizes.get(region.page)!;
+    const crop: [number, number, number, number] = [region.x0 / size.width, region.y0 / size.height, region.x1 / size.width, region.y1 / size.height];
+    const image = nativeImage.createFromDataURL(await renderPage(docId, region.page, FIGURE_SCALE, crop));
+    const ink = inkBounds(image, region.edge);
+    if (!ink || ink.height < 10) continue;
+    const pad = 6;
+    const { width, height } = image.getSize();
+    const x = Math.max(0, ink.x - pad);
+    const y = Math.max(0, ink.y - pad);
+    const area = { x, y, width: Math.min(width, ink.x + ink.width + pad) - x, height: Math.min(height, ink.y + ink.height + pad) - y };
+    const file = `figures/${i + 1}.png`;
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(ctx.store.jobDir(ctx.job.id), file), image.crop(area).toPNG());
+    region.caption.snapshot = { file, position: region.position, width: area.width / FIGURE_SCALE, height: area.height / FIGURE_SCALE };
+    for (const m of region.members) Object.assign(m, { inSnapshot: true, layoutOnly: true, figure: true, needsRepair: false });
+  }
+}
+
 /** Tabulky bez buněk přečte znovu vision model pro opravy z výřezu stránky. */
 async function repairTables(ctx: JobContext, docId: string, blocks: Block[]) {
   const broken = blocks.filter((b) => b.needsRepair);
@@ -363,6 +440,7 @@ async function extractPdf(ctx: JobContext, file: string, eta: Eta): Promise<Segm
       blocks.push(...result);
       done++;
     }
+    if (job.keepFigures) await snapshotFigures(ctx, docId, blocks);
     await repairTables(ctx, docId, blocks);
     const segments = blocksToSegments(markDuplicateBlocks(mergeBrokenHeadings(mergeAcrossPages(dropRepeatedBlocks(blocks)))));
     for (const s of segments) if (s.page && warnings.has(s.page)) s.warning ??= warnings.get(s.page);
@@ -399,7 +477,7 @@ async function translateText(ctx: JobContext, text: string) {
     ctx,
     'translate',
     [
-      { role: 'system', content: translateSystem(job.sourceLang, job.targetLang) },
+      { role: 'system', content: translateSystem(job.sourceLang, job.targetLang, relevantGlossary(text, ctx.glossary), job.context) },
       { role: 'user', content: text },
     ],
     maxTokens,
@@ -509,7 +587,7 @@ async function translateAll(ctx: JobContext, segments: Segment[], eta: Eta) {
   const tasks: (() => Promise<void>)[] = [
     () => translateLinks(ctx, segments),
     ...segments
-      .filter((s) => s.kind === 'table')
+      .filter((s) => s.kind === 'table' && !s.layoutOnly)
       .map((table) => async () => {
         const { text, notes } = rewriteDates(table.source, ctx.job.sourceLang, ctx.job.targetLang, order);
         addNotes(table, notes);
@@ -748,7 +826,7 @@ export async function runJob(ctx: JobContext): Promise<Measured> {
   if (job.resume) clearLayoutNotes(job, segments);
   const dir = store.jobDir(job.id);
   job.output = outputName(job);
-  await writeFile(path.join(dir, job.output), await buildDocx(job.name, segments));
+  await writeFile(path.join(dir, job.output), await buildDocx(job.name, segments, await loadFigures(dir, segments)));
   await writeFile(path.join(dir, job.output.replace(/\.docx$/, '.md')), segmentsToMarkdown(segments));
   if (job.ext.toLowerCase() === '.pdf' && settings.layoutPdf && ctx.pages) await writeLayoutPdf(ctx, segments, ctx.pages);
   job.warnings = segments.filter((s) => s.warning).length;
@@ -774,7 +852,8 @@ async function writeLayoutPdf(ctx: JobContext, segments: Segment[], pages: Map<n
   try {
     // Původní dokument zavřel extractPdf; kvůli barvě pozadí se otevře znovu.
     await openPdf(docId, input.slice());
-    const result = await buildLayoutPdf(input, segments, pages, {
+    // Výřezy originálu (tabulky, grafy) zůstanou v PDF beze změny.
+    const result = await buildLayoutPdf(input, segments.filter((s) => !s.inSnapshot), pages, {
       fontsDir: path.join(__dirname, 'fonts'),
       pageImage: (page, noText) => pageImage(docId, page, noText),
       text: finalText,

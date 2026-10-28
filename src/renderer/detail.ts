@@ -190,6 +190,20 @@ function renderProgress(job: Job) {
   );
 }
 
+/** Výřez tabulky/grafu z originálu; obrázek se doplní po načtení. */
+function figureEl(s: Segment) {
+  const img = h('img', { class: 'figure-snapshot', alt: '' }) as HTMLImageElement;
+  // Velikost jako v tištěném článku (body ≈ CSS px), ne roztažené na celou šířku.
+  if (s.snapshot) img.style.width = `${Math.round(s.snapshot.width * 1.4)}px`;
+  if (current && s.snapshot) {
+    window.api.jobFigure(current.job.id, s.snapshot.file).then(
+      (src) => (img.src = src),
+      () => img.remove(),
+    );
+  }
+  return img;
+}
+
 function compareView(segments: Segment[]) {
   const grid = h(
     'div',
@@ -204,10 +218,13 @@ function compareView(segments: Segment[]) {
       grid.append(h('div', { class: 'compare-page' }, t('detail.page', { page })));
     }
     const cls = `compare-cell${s.kind === 'heading' ? ' heading' : ''}${s.warning ? ' has-warning' : ''}${s.skipped ? ' skipped' : ''}`;
+    const figure = s.snapshot ? h('div', { class: 'compare-figure' }, figureEl(s)) : null;
+    if (figure && s.snapshot?.position === 'before') grid.append(figure);
     grid.append(
       h('div', { class: cls }, s.source),
       h('div', { class: cls }, s.skipped ? t('detail.skipped') : finalText(s) || '…', s.warning ? h('span', { class: 'warning-note' }, `⚠ ${s.warning}`) : null),
     );
+    if (figure && s.snapshot?.position !== 'before') grid.append(figure);
   }
   return grid;
 }
@@ -448,6 +465,7 @@ function documentView(segments: Segment[], text: (s: Segment) => string) {
   const doc = h('article', { class: 'doc' });
   for (const s of segments) {
     const body = text(s);
+    if (s.snapshot?.position === 'before') doc.append(figureEl(s));
     if (s.kind === 'heading') doc.append(h('h2', {}, body));
     else if (s.kind === 'list') {
       const ul = h('ul');
@@ -455,6 +473,7 @@ function documentView(segments: Segment[], text: (s: Segment) => string) {
       doc.append(ul);
     } else if (s.kind === 'table') doc.append(tableEl(body));
     else doc.append(h('p', {}, body));
+    if (s.snapshot && s.snapshot.position !== 'before') doc.append(figureEl(s));
   }
   return doc;
 }

@@ -246,6 +246,12 @@ function fillLanguages() {
   }
   source.value = settings.sourceLang;
   target.value = settings.targetLang;
+  const keep = $<HTMLInputElement>('keep-figures');
+  keep.checked = settings.keepFigures;
+  keep.addEventListener('change', async () => {
+    settings.keepFigures = keep.checked;
+    await window.api.saveSettings(settings);
+  });
   const save = async () => {
     settings.sourceLang = source.value;
     settings.targetLang = target.value;
@@ -318,6 +324,7 @@ async function startPending() {
       targetLang: settings.targetLang,
       pageRange,
       pickParagraphs: $<HTMLInputElement>('pick-paragraphs').checked,
+      keepFigures: $<HTMLInputElement>('keep-figures').checked,
       provider: settings.provider,
     });
     pending = [];

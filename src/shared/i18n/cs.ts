@@ -318,6 +318,8 @@ export const cs = {
   'review.genderFemale': 'Autor je žena, ale překlad používá mužský rod: {words}.',
   'review.genderMale': 'Autor je muž, ale překlad používá ženský rod: {words}.',
   'home.pickParagraphs': 'Vybrat odstavce před překladem',
+  'home.keepFigures': 'Tabulky a grafy z originálu',
+  'home.keepFiguresHint': 'Tabulky a grafy s popiskem (Table 1, Figure 2…) se nepřekládají, vloží se jako obrázek z originálu; přeloží se jen popisek.',
   'home.pickParagraphsHint': 'Po přečtení dokumentu si vybereš, které odstavce se přeloží.',
   'detail.skipped': 'Nepřeloženo – v PDF zůstane originál',
   'pick.count': 'Vybráno {selected} z {total} odstavců · {chars} znaků',

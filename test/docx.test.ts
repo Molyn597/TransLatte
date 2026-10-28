@@ -51,3 +51,31 @@ describe('buildDocx', () => {
     expect(rels).toContain('https://example.com/docs');
   });
 });
+
+describe('buildDocx s výřezem originálu', () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const caption = (position: 'before' | 'after'): Segment => ({
+    id: 0,
+    kind: 'paragraph',
+    source: 'Table 1. Results',
+    translation: 'Tabulka 1. Výsledky',
+    snapshot: { file: 'figures/0.png', position, width: 600, height: 300 },
+  });
+
+  it('vloží obrázek jako média a zmenší ho na šířku stránky', async () => {
+    const { default: JSZip } = await import('jszip');
+    const zip = await JSZip.loadAsync(await buildDocx('Test', [caption('after')], new Map([['figures/0.png', png]])));
+    expect(Object.keys(zip.files).some((f) => f.startsWith('word/media/'))).toBe(true);
+    const xml = await zip.file('word/document.xml')!.async('string');
+    expect(xml.indexOf('Tabulka 1')).toBeLessThan(xml.indexOf('<w:drawing'));
+    expect(xml).toContain(`cx="${601 * 9525}"`);
+  });
+
+  it('obrázek před popiskem a bez souboru bez obrázku', async () => {
+    const { default: JSZip } = await import('jszip');
+    const before = await (await JSZip.loadAsync(await buildDocx('Test', [caption('before')], new Map([['figures/0.png', png]])))).file('word/document.xml')!.async('string');
+    expect(before.indexOf('<w:drawing')).toBeLessThan(before.indexOf('Tabulka 1'));
+    const none = await JSZip.loadAsync(await buildDocx('Test', [caption('before')]));
+    expect(Object.keys(none.files).some((f) => f.startsWith('word/media/'))).toBe(false);
+  });
+});

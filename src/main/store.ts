@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS: Settings = {
   unloadWhenIdle: true,
   theme: 'system',
   layoutPdf: true,
+  keepFigures: true,
   rates: { ocrPerPage: 7, translatePerKChar: 25, fixPerSegment: 8 },
   remoteRates: { ocrPerPage: 6, translatePerKChar: 6, fixPerSegment: 3 },
   remoteCostFactors: {},

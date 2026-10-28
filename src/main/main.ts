@@ -239,6 +239,12 @@ function registerIpc() {
     const job = await store.job(id);
     return job ? new Uint8Array(await readFile(store.inputPath(job))) : null;
   });
+  ipcMain.handle('job-figure', async (_e, id: string, file: string) => {
+    if (!/^figures\/[\w.-]+\.png$/.test(file) || file.includes('..')) throw new Error('Neplatný soubor');
+    const job = await store.job(id);
+    if (!job) throw new Error('Úloha neexistuje');
+    return `data:image/png;base64,${(await readFile(path.join(store.jobDir(job.id), file))).toString('base64')}`;
+  });
   ipcMain.handle('job-output-pdf', async (_e, id: string) => {
     const job = await store.job(id);
     const file = job && jobFile(job, 'pdf');

@@ -28,13 +28,31 @@ export function translateGemmaPrompt(text: string, source: string, target: strin
 
 export const isTranslateGemma = (modelKey: string) => /translategemma/i.test(modelKey);
 
-/** Pro jiné překladové modely než TranslateGemma (chat API). */
-export function translateSystem(source: string, target: string) {
-  return (
-    `You are a professional ${englishName(source)} to ${englishName(target)} translator. Translate the user's text ` +
-    `faithfully. Keep paragraph breaks (blank lines), lists and Markdown tables exactly as they are. ` +
-    `Output only the translation, without any comments.`
-  );
+/**
+ * Pro jiné překladové modely než TranslateGemma (chat API, hlavně online). Silnější modely
+ * zvládnou delší zadání: rejstřík, co nechat beze změny, kontext dokumentu a závazné termíny.
+ */
+export function translateSystem(source: string, target: string, glossary: GlossaryEntry[] = [], context?: DocumentContext) {
+  const tgt = englishName(target);
+  const parts = [
+    `You are a professional translator of academic and professional texts from ${englishName(source)} into ${tgt}. ` +
+      'Translate the user\'s text faithfully and completely: do not summarize, omit, add or explain anything. ' +
+      `Write natural, fluent ${tgt} in a formal academic register and keep terminology consistent.`,
+    'Keep unchanged: personal names, citations such as (Smith 2003) or [12], numbers and units, formulas and variable names, URLs, ' +
+      'and bibliography entries. Keep paragraph breaks (blank lines), lists and Markdown tables exactly as they are; ' +
+      'in a table translate only the text inside the cells.',
+  ];
+  if (target === 'cs') {
+    parts.push(
+      'Use Czech typography (quotation marks „…“) and natural Czech word order, not calqued from English. ' +
+        'Keep the first person where the author uses it; past-tense verbs referring to a single author agree with the author\'s gender from the context.',
+    );
+  }
+  const lines = contextLines(context, 'en');
+  if (lines.length) parts.push(`Document context:\n${lines.join('\n')}`);
+  if (glossary.length) parts.push(`Mandatory terminology (use it in the grammatically correct form):\n${glossaryLines(glossary)}`);
+  parts.push(`Output only the ${tgt} translation, without any comments.`);
+  return parts.join('\n\n');
 }
 
 function glossaryLines(glossary: GlossaryEntry[]) {

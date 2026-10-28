@@ -60,7 +60,21 @@ export interface Segment {
   figure?: boolean;
   /** Nevybraný k překladu: v PDF zůstane původní, ve Wordu není. */
   skipped?: boolean;
+  /** Popisek tabulky/grafu: obsah se nepřekládá, vloží se jako výřez originálu (soubor ve složce úlohy). */
+  snapshot?: FigureSnapshot;
+  /** Text uvnitř výřezu originálu: nepřekládá se, v PDF zůstane původní, ve Wordu je jen obrázek. */
+  inSnapshot?: boolean;
   links?: SegmentLink[];
+}
+
+export interface FigureSnapshot {
+  /** Cesta relativně ke složce úlohy, např. figures/12.png. */
+  file: string;
+  /** Obrázek před popiskem (graf s popiskem pod ním) nebo za ním (tabulka s popiskem nad ní). */
+  position: 'before' | 'after';
+  /** Velikost výřezu v bodech PDF. */
+  width: number;
+  height: number;
 }
 
 export interface Progress {
@@ -101,6 +115,8 @@ export interface Job {
   notes?: string[];
   /** Po přečtení PDF počkat na výběr odstavců. */
   pickParagraphs?: boolean;
+  /** Tabulky a grafy s popiskem ponechat jako výřez originálu. */
+  keepFigures?: boolean;
   /** Další běh pokračuje z uložených segmentů a přeloží jen vybrané nepřeložené. */
   resume?: boolean;
   /** Poskytovatel modelů, který úlohu zpracoval (bez hodnoty = lokální). */
@@ -130,6 +146,7 @@ export interface JobOptions {
   targetLang: string;
   pageRange?: string;
   pickParagraphs?: boolean;
+  keepFigures?: boolean;
   /** Bez hodnoty = podle nastavení v okamžiku spuštění. */
   provider?: Provider;
 }
@@ -180,6 +197,8 @@ export interface Settings {
   theme: Theme;
   /** U PDF vytvořit i přeložené PDF se zachovaným vzhledem. */
   layoutPdf: boolean;
+  /** Výchozí stav volby „Tabulky a grafy z originálu“ na úvodní stránce. */
+  keepFigures: boolean;
   rates: Rates;
   /** Rychlosti online modelů (odhad času se u nich počítá zvlášť). */
   remoteRates: Rates;
@@ -242,6 +261,8 @@ export interface Api {
   listJobs(): Promise<Job[]>;
   getJob(id: string): Promise<JobDetail | null>;
   readInput(id: string): Promise<Uint8Array | null>;
+  /** Výřez tabulky/grafu z originálu jako data URL. */
+  jobFigure(id: string, file: string): Promise<string>;
   readOutputPdf(id: string): Promise<Uint8Array | null>;
   cancelJob(id: string): Promise<void>;
   retryJob(id: string, mode: Mode): Promise<void>;

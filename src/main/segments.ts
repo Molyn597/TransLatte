@@ -1,5 +1,5 @@
 import type { LinkArea, TextItem } from '../shared/pdf';
-import type { Rect, Segment, SegmentKind, SegmentLink } from '../shared/types';
+import type { FigureSnapshot, Rect, Segment, SegmentKind, SegmentLink } from '../shared/types';
 
 export interface Block {
   kind: SegmentKind;
@@ -20,6 +20,8 @@ export interface Block {
   needsRepair?: boolean;
   warning?: string;
   links?: SegmentLink[];
+  snapshot?: FigureSnapshot;
+  inSnapshot?: boolean;
 }
 
 const LIST_LINE = /^\s*([-*•–]|\d+[.)])\s+/;
@@ -790,7 +792,7 @@ export function mergeAcrossPages(blocks: Block[]): Block[] {
   const out: Block[] = [];
   for (const b of blocks) {
     const open = b.page !== undefined ? openBefore(out, b) : undefined;
-    if (open && continuesInto(open, b)) joinInto(open, b);
+    if (open && !b.inSnapshot && continuesInto(open, b)) joinInto(open, b);
     else out.push({ ...b });
   }
   return out;
@@ -906,6 +908,8 @@ export function blocksToSegments(blocks: Block[]): Segment[] {
       ...(b.layoutOnly && { layoutOnly: true }),
       ...(b.figure && { figure: true }),
       ...(b.links?.length && { links: b.links }),
+      ...(b.snapshot && { snapshot: b.snapshot }),
+      ...(b.inSnapshot && { inSnapshot: true }),
     }));
 }
 
@@ -965,6 +969,170 @@ export const visibleSegments = (segments: Segment[]) => segments.filter((s) => !
 
 export function segmentsToMarkdown(segments: Segment[], text: (s: Segment) => string = finalText): string {
   return visibleSegments(segments)
-    .map((s) => (s.kind === 'heading' ? `## ${text(s).replace(/^#+\s*/, '')}` : text(s)))
+    .map((s) => {
+      const body = s.kind === 'heading' ? `## ${text(s).replace(/^#+\s*/, '')}` : text(s);
+      if (!s.snapshot) return body;
+      const image = `![](${s.snapshot.file})`;
+      return s.snapshot.position === 'before' ? `${image}\n\n${body}` : `${body}\n\n${image}`;
+    })
     .join('\n\n');
+}
+
+// ---------- Tabulky a grafy z originálu ----------
+
+const FIGURE_WORD = /^(figure|fig\.|graph|chart|picture|exhibit|obr(?:ázek|\.)|graf|schéma|diagram)/i;
+const CAPTION_START = /^(table|tab\.|tabulka|figure|fig\.|graph|chart|picture|exhibit|obr(?:ázek|\.)|graf|schéma|diagram)\s*([A-Z]?\d+[a-z]?|[IVXLC]+)\b\s*(.*)/is;
+
+/**
+ * Popisek „Table 1. …“, „FIGURE 2“, „Obrázek 3: …“. Věta „Table 1 shows…“ popisek není:
+ * za číslem musí být konec, interpunkce nebo velké písmeno.
+ */
+export function captionKind(text: string): 'table' | 'figure' | undefined {
+  const m = text.trim().match(CAPTION_START);
+  if (!m || text.length > 400) return undefined;
+  const rest = m[3];
+  if (rest && !/^[.:—–\-)(]|^\p{Lu}/u.test(rest)) return undefined;
+  return FIGURE_WORD.test(m[1]) ? 'figure' : 'table';
+}
+
+export interface FigureRegion {
+  caption: Block;
+  members: Block[];
+  page: number;
+  /** Oblast v bodech stránky (y shora). */
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  position: 'before' | 'after';
+  /** Oblast sahá k okraji stránky: záhlaví nebo číslo stránky (mezi bloky už nejsou) se musí oříznout z obrázku. */
+  edge: { top: boolean; bottom: boolean };
+}
+
+type Bounds = { x0: number; y0: number; x1: number; y1: number };
+
+function blockBounds(b: Block, size: { width: number; height: number }, firstOnly = false): Bounds | undefined {
+  const all = b.rects?.filter((r) => r.page === b.page) ?? [];
+  const rects = firstOnly ? all.slice(0, 1) : all;
+  if (rects.length) {
+    return {
+      x0: Math.min(...rects.map((r) => r.x)),
+      y0: Math.min(...rects.map((r) => r.y)),
+      x1: Math.max(...rects.map((r) => r.x + r.w)),
+      y1: Math.max(...rects.map((r) => r.y + r.h)),
+    };
+  }
+  if (!b.box) return undefined;
+  const [x0, y0, x1, y1] = b.box.map((v) => Math.min(999, Math.max(0, v)) / 999);
+  return { x0: x0 * size.width, y0: y0 * size.height, x1: x1 * size.width, y1: y1 * size.height };
+}
+
+// Řádek tabulky čtený jako odstavec: hodně čísel („0.7894a“, „(0.2753)“, „–0.82“).
+function mostlyNumbers(text: string) {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const numbers = tokens.filter((w) => /^[(\-–\x01]?[\d.,]+[a-z]?\)?%?$/.test(w));
+  return numbers.length >= tokens.length * 0.25;
+}
+
+// Běžný text, nadpis nebo poznámka pod tabulkou: tam oblast tabulky či grafu končí.
+const isStopper = (b: Block) =>
+  !b.figure &&
+  !b.layoutOnly &&
+  b.kind !== 'table' &&
+  (/^(notes?|source|sources|zdroj|pozn)\b/i.test(b.text) ||
+    !!captionKind(b.text) ||
+    ((b.kind === 'heading' || b.text.length >= 200) && !mostlyNumbers(b.text)));
+
+// Okraje stránky, kde bývá záhlaví a číslo stránky (z bloků už odstraněné, v obrázku ale jsou).
+const MARGIN = 0.065;
+const MIN_HEIGHT = 30;
+
+/**
+ * Oblasti tabulek a grafů podle popisků. Oblast sahá od popisku k nejbližšímu běžnému textu
+ * ve stejném sloupci (tabulka typicky pod popiskem, graf nad ním); co v ní leží, se nepřekládá.
+ */
+export function findFigureRegions(blocks: Block[], sizes: Map<number, { width: number; height: number }>): FigureRegion[] {
+  const regions: FigureRegion[] = [];
+  const byPage = new Map<number, { b: Block; r: Bounds }[]>();
+  for (const b of blocks) {
+    const size = b.page !== undefined ? sizes.get(b.page) : undefined;
+    const r = size && blockBounds(b, size);
+    if (r) byPage.set(b.page!, [...(byPage.get(b.page!) ?? []), { b, r }]);
+  }
+  for (const [page, items] of byPage) {
+    const size = sizes.get(page)!;
+    const left = Math.min(...items.map((i) => i.r.x0));
+    const right = Math.max(...items.map((i) => i.r.x1));
+    const top = size.height * MARGIN;
+    const bottom = size.height * (1 - MARGIN);
+    for (const item of items) {
+      const kind = item.b.kind !== 'table' && !item.b.figure && !item.b.layoutOnly ? captionKind(item.b.text) : undefined;
+      if (!kind) continue;
+      // Popisek slitý se záhlavím tabulky („… Study No. of Children“): hranicí je jeho první řádek.
+      const cap = { b: item.b, r: blockBounds(item.b, size, true) ?? item.r };
+      const overlapsCaption = (r: Bounds) => Math.min(r.x1, cap.r.x1) - Math.max(r.x0, cap.r.x0) > 0;
+      const stoppers = items.filter((i) => i.b !== cap.b && isStopper(i.b));
+      const band = (dir: 'before' | 'after') => {
+        let y0: number;
+        let y1: number;
+        if (dir === 'after') {
+          y0 = cap.r.y1;
+          y1 = Math.min(bottom, ...stoppers.filter((i) => overlapsCaption(i.r) && i.r.y0 >= cap.r.y1 - 2).map((i) => i.r.y0));
+        } else {
+          y1 = cap.r.y0;
+          y0 = Math.max(top, ...stoppers.filter((i) => overlapsCaption(i.r) && i.r.y1 <= cap.r.y0 + 2).map((i) => i.r.y1));
+        }
+        // Text druhého sloupce vedle oblasti ji zúží na sloupec popisku.
+        let x0 = Math.min(left, cap.r.x0);
+        let x1 = Math.max(right, cap.r.x1);
+        for (const s of stoppers) {
+          if (overlapsCaption(s.r) || s.r.y1 <= y0 || s.r.y0 >= y1) continue;
+          if (s.r.x0 >= cap.r.x1) x1 = Math.min(x1, s.r.x0 - 2);
+          else if (s.r.x1 <= cap.r.x0) x0 = Math.max(x0, s.r.x1 + 2);
+        }
+        const inside = (r: Bounds) => {
+          const cx = (r.x0 + r.x1) / 2;
+          const cy = (r.y0 + r.y1) / 2;
+          return cx > x0 && cx < x1 && cy > y0 && cy < y1;
+        };
+        const members = items.filter((i) => i.b !== cap.b && !stoppers.includes(i) && inside(i.r)).map((i) => i.b);
+        return { x0, y0, x1, y1, members, height: y1 - y0, strong: members.some((m) => m.kind === 'table' || m.figure) };
+      };
+      const after = band('after');
+      const before = band('before');
+      const preferred = kind === 'table' ? after : before;
+      const other = preferred === after ? before : after;
+      // Oblast už patřící jinému popisku (dva grafy pod sebou) se nepřebírá.
+      const taken = (x: ReturnType<typeof band>) =>
+        regions.some((g) => g.page === page && Math.min(g.y1, x.y1) - Math.max(g.y0, x.y0) > Math.min(g.y1 - g.y0, x.height) * 0.5);
+      let chosen =
+        after.strong !== before.strong
+          ? after.strong
+            ? after
+            : before
+          : preferred.height >= MIN_HEIGHT * 2 || other.height < preferred.height
+            ? preferred
+            : other;
+      if (taken(chosen)) chosen = chosen === after ? before : after;
+      if (chosen.height < MIN_HEIGHT || taken(chosen) || regions.some((g) => g.page === page && g.members.includes(cap.b))) continue;
+      // Zbytek popisku uvnitř oblasti je záhlaví tabulky: zůstane v obrázku, nepřekládá se.
+      const [head, ...rest] = cap.b.rects ?? [];
+      if (chosen === after && rest.length && rest.every((r) => r.page === page && r.y >= chosen.y0 - 1 && r.chars)) {
+        cap.b.text = cap.b.text.slice(0, head.chars ?? cap.b.text.length).trim();
+        cap.b.rects = [head];
+      }
+      regions.push({
+        caption: cap.b,
+        members: chosen.members,
+        page,
+        x0: chosen.x0,
+        y0: chosen.y0,
+        x1: chosen.x1,
+        y1: chosen.y1,
+        position: chosen === after ? 'after' : 'before',
+        edge: { top: chosen.y0 <= top, bottom: chosen.y1 >= bottom },
+      });
+    }
+  }
+  return regions;
 }

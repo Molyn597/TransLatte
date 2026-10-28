@@ -1604,3 +1604,20 @@ input:focus {
   background: var(--success-soft);
   color: var(--success);
 }
+
+.compare-figure {
+  grid-column: 1 / -1;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+}
+
+.figure-snapshot {
+  max-width: 100%;
+  height: auto;
+}
+
+.doc .figure-snapshot {
+  display: block;
+  margin: 12px auto;
+}

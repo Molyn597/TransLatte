@@ -1,4 +1,6 @@
-import { Document, ExternalHyperlink, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from 'docx';
+import { Document, ExternalHyperlink, HeadingLevel, ImageRun, Packer, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from 'docx';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { Segment } from '../shared/types';
 import { findAnchors } from './quality';
 import { finalText, visibleSegments } from './segments';
@@ -53,9 +55,38 @@ function linkSpans(s: Segment, text: string): Span[] {
   return s.links.flatMap((l, i) => (l.url && found[i] ? [{ ...found[i]!, url: l.url }] : []));
 }
 
-export async function buildDocx(title: string, segments: Segment[]): Promise<Buffer> {
+/** Šířka textu na A4 s okraji 1 palec, v pixelech (96 dpi), jak je bere knihovna docx. */
+const MAX_IMAGE_WIDTH = 601;
+
+function figureParagraph(s: Segment, images: Map<string, Buffer>) {
+  const snap = s.snapshot;
+  const data = snap && images.get(snap.file);
+  if (!snap || !data || !snap.width || !snap.height) return null;
+  const width = Math.min((snap.width * 4) / 3, MAX_IMAGE_WIDTH);
+  const height = Math.round((width * snap.height) / snap.width);
+  const run = new ImageRun({ type: 'png', data, transformation: { width: Math.round(width), height }, altText: { name: snap.file, description: snap.file, title: snap.file } });
+  return new Paragraph({ children: [run], spacing: { before: 120, after: 120 } });
+}
+
+/** Načte výřezy tabulek a grafů ze složky úlohy; chybějící soubor se přeskočí. */
+export async function loadFigures(dir: string, segments: Segment[]): Promise<Map<string, Buffer>> {
+  const images = new Map<string, Buffer>();
+  for (const s of segments) {
+    if (!s.snapshot) continue;
+    try {
+      images.set(s.snapshot.file, await readFile(path.join(dir, s.snapshot.file)));
+    } catch {
+      /* obrázek chybí */
+    }
+  }
+  return images;
+}
+
+export async function buildDocx(title: string, segments: Segment[], images: Map<string, Buffer> = new Map()): Promise<Buffer> {
   const children: (Paragraph | Table)[] = [];
   for (const s of visibleSegments(segments)) {
+    const figure = figureParagraph(s, images);
+    if (figure && s.snapshot?.position === 'before') children.push(figure);
     const text = finalText(s);
     const spans = linkSpans(s, text);
     if (s.kind === 'heading') {
@@ -74,6 +105,7 @@ export async function buildDocx(title: string, segments: Segment[]): Promise<Buf
     } else {
       children.push(new Paragraph({ children: inline(text, 0, text.length, spans), spacing: { after: 160 } }));
     }
+    if (figure && s.snapshot?.position !== 'before') children.push(figure);
   }
   const doc = new Document({
     title,
