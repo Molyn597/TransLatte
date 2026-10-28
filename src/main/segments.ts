@@ -584,40 +584,103 @@ export function addUnreadableTables(blocks: Block[], items: TextItem[], size: { 
   return out;
 }
 
-/** Svislá mezera mezi sloupci: nejdelší úsek kolem středu stránky, který nepřekrývá žádný úsek řádku. */
-function gutterCenter(spans: [number, number][], pageWidth: number) {
-  const mid = pageWidth / 2;
-  let best = { len: -1, center: mid };
-  let start: number | null = null;
-  for (let x = Math.floor(mid - pageWidth * 0.12); x <= mid + pageWidth * 0.12 + 1; x++) {
-    const free = x <= mid + pageWidth * 0.12 && !spans.some(([a, b]) => a < x && b > x);
-    if (free && start === null) start = x;
-    if (!free && start !== null) {
-      if (x - start > best.len) best = { len: x - start, center: (start + x - 1) / 2 };
-      start = null;
+type Row = { items: TextItem[]; spans: [number, number][] };
+
+/**
+ * Svislé mezery mezi sloupci: místa s aspoň třemi řádky textu vlevo i vpravo, přes která vede
+ * nejvýš polovina tolika řádků (název, abstrakt nad sloupci). Najde i třetí sloupec nebo úzký
+ * boční rámeček, nejen dělení uprostřed stránky. V širší volné oblasti platí místo, přes které
+ * vede nejméně řádků (mezera vedle bočního rámečku, ne okraj užšího sloupce pod nadpisem).
+ */
+function findGutters(rows: Row[], pageWidth: number): number[] {
+  const x0 = Math.floor(Math.min(...rows.flatMap((r) => r.spans.map(([a]) => a))));
+  const x1 = Math.ceil(Math.max(...rows.flatMap((r) => r.spans.map(([, b]) => b))));
+  // Řádek přes téměř celou šířku (abstrakt, poznámka pod čarou) je pás nad sloupci, mezeru nezakrývá.
+  const full = (x1 - x0) * 0.8;
+  const covers: (number | undefined)[] = [];
+  for (let x = x0; x <= x1; x++) {
+    let left = 0;
+    let right = 0;
+    let covered = 0;
+    for (const r of rows) {
+      const over = r.spans.find(([a, b]) => a < x && b > x);
+      if (over) covered += over[1] - over[0] < full ? 1 : 0;
+      else {
+        if (r.spans.some(([, b]) => b <= x)) left++;
+        if (r.spans.some(([a]) => a >= x)) right++;
+      }
     }
+    covers.push(left >= 3 && right >= 3 && covered <= Math.min(left, right) / 2 ? covered : undefined);
   }
-  return best.center;
+  const gutters: number[] = [];
+  for (let i = 0; i < covers.length; ) {
+    if (covers[i] === undefined) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < covers.length && covers[j] !== undefined) j++;
+    // Nejdelší úsek s nejmenším počtem řádků přes mezeru (± jeden řádek, např. zápatí).
+    const least = Math.min(...(covers.slice(i, j) as number[])) + 1;
+    const low = (k: number) => covers[k]! <= least;
+    let best: [number, number] = [i, i];
+    for (let k = i; k < j; ) {
+      if (!low(k)) {
+        k++;
+        continue;
+      }
+      let m = k;
+      while (m < j && low(m)) m++;
+      if (m - k > best[1] - best[0]) best = [k, m];
+      k = m;
+    }
+    if (best[1] - best[0] >= pageWidth * 0.008) gutters.push(x0 + (best[0] + best[1] - 1) / 2);
+    i = j;
+  }
+  return gutters;
+}
+
+// Sloupec souvislého textu: aspoň tři řádky široké jako sloupec článku, nebo delší řádky
+// slov (úzký boční rámeček). Buňky tabulky s čísly ani krátkými hodnotami sloupcem nejsou.
+function isProseColumn(rows: TextItem[][], pageWidth: number) {
+  const texts = rows.map((items) => items.map((i) => i.str).join(' ').trim()).filter(Boolean);
+  // Sloupec čísel tabulky; v textu článku je čísel nanejvýš polovina.
+  if (texts.length < 3 || mostlyNumbers(texts.join(' '), 0.6)) return false;
+  const wide = rows.filter((items) => Math.max(...items.map((i) => i.x + i.w)) - Math.min(...items.map((i) => i.x)) > pageWidth * 0.25).length;
+  if (wide >= 3) return true;
+  const chars = texts.reduce((n, t) => n + t.length, 0);
+  return chars / texts.length >= 10;
+}
+
+/** Řádky pásu rozdělené do sloupců; sloupec, který není souvislým textem (buňky tabulky), se přidá k sousednímu. */
+function splitColumns(band: Row[], gutters: number[], pageWidth: number): TextItem[][] | undefined {
+  let edges = gutters;
+  for (;;) {
+    const columns = Array.from({ length: edges.length + 1 }, (_, c) =>
+      band.map((r) => r.items.filter((it) => edges.filter((g) => it.x + it.w / 2 >= g).length === c)).filter((items) => items.length),
+    );
+    const used = columns.map((rows, c) => ({ rows, c })).filter((x) => x.rows.length);
+    if (used.length < 2) return undefined;
+    const bad = used.find((x) => !isProseColumn(x.rows, pageWidth));
+    if (!bad) return used.map((x) => x.rows.flat());
+    // Hranice sloupce, který je tabulkou, se zruší (tabulka zůstane pohromadě).
+    edges = edges.filter((_, i) => i !== (bad.c < edges.length ? bad.c : bad.c - 1));
+  }
 }
 
 /**
- * Textová vrstva PDF → bloky. Stránka se dělí na vodorovné pásy: řádky přes střed stránky
- * (název, abstrakt, široká tabulka) se čtou celé, pásy dvou sloupců nejdřív vlevo, pak vpravo,
- * jinak by se řádky obou sloupců prolínaly.
+ * Textová vrstva PDF → bloky. Stránka se dělí na vodorovné pásy: řádky přes mezeru mezi sloupci
+ * (název, abstrakt, široká tabulka) se čtou celé, pásy se sloupci postupně zleva doprava,
+ * jinak by se řádky sousedních sloupců prolínaly.
  */
 export function layoutToBlocks(items: TextItem[], pageWidth: number, page: number): Block[] {
   const real = items.filter((i) => i.str.trim());
   if (!real.length) return [];
-  const mid = pageWidth / 2;
-  const tolerance = pageWidth * 0.02;
-  const rows = toRows(real).map((row) => {
-    // Užší práh než u ploch řádku: mezera mezi sloupci bývá jen o málo větší než písmo.
-    const spans = rowSpans(row.items, 0.6);
-    return { items: row.items, spans, spanning: spans.some(([a, b]) => a < mid - tolerance && b > mid + tolerance) };
-  });
+  // Užší práh než u ploch řádku: mezera mezi sloupci bývá jen o málo větší než písmo.
+  const rows: Row[] = toRows(real).map((row) => ({ items: row.items, spans: rowSpans(row.items, 0.6) }));
+  const gutters = findGutters(rows, pageWidth);
+  const crosses = (r: Row) => r.spans.some(([a, b]) => gutters.some((g) => a < g - 1 && b > g + 1));
 
-  // Pás dvou sloupců: aspoň tři řádky textu na každé straně a řádky široké jako sloupec
-  // (tabulka s krátkými buňkami se na sloupce nedělí).
   const groups: TextItem[][] = [];
   let full: TextItem[] = [];
   const flush = () => {
@@ -625,23 +688,19 @@ export function layoutToBlocks(items: TextItem[], pageWidth: number, page: numbe
     full = [];
   };
   for (let i = 0; i < rows.length; ) {
-    if (rows[i].spanning) {
+    if (crosses(rows[i])) {
       full.push(...rows[i++].items);
       continue;
     }
-    const band: typeof rows = [];
-    while (i < rows.length && !rows[i].spanning) band.push(rows[i++]);
-    const gutter = gutterCenter(band.flatMap((r) => r.spans), pageWidth);
-    const side = (r: (typeof band)[number], left: boolean) => r.spans.filter(([a, b]) => (a + b) / 2 < gutter === left);
-    const widths = (left: boolean) => band.map((r) => side(r, left)).filter((s) => s.length).map((s) => Math.max(...s.map(([, b]) => b)) - Math.min(...s.map(([a]) => a)));
-    const columnar = (w: number[]) => w.filter((x) => x > pageWidth * 0.25).length >= 3;
-    if (!columnar(widths(true)) || !columnar(widths(false))) {
+    const band: Row[] = [];
+    while (i < rows.length && !crosses(rows[i])) band.push(rows[i++]);
+    const columns = gutters.length ? splitColumns(band, gutters, pageWidth) : undefined;
+    if (!columns) {
       for (const r of band) full.push(...r.items);
       continue;
     }
     flush();
-    const items = band.flatMap((r) => r.items);
-    groups.push(items.filter((it) => it.x + it.w / 2 < gutter), items.filter((it) => it.x + it.w / 2 >= gutter));
+    groups.push(...columns);
   }
   flush();
 
@@ -1028,10 +1087,10 @@ function blockBounds(b: Block, size: { width: number; height: number }, firstOnl
 }
 
 // Řádek tabulky čtený jako odstavec: hodně čísel („0.7894a“, „(0.2753)“, „–0.82“).
-function mostlyNumbers(text: string) {
+function mostlyNumbers(text: string, share = 0.25) {
   const tokens = text.split(/\s+/).filter(Boolean);
-  const numbers = tokens.filter((w) => /^[(\-–\x01]?[\d.,]+[a-z]?\)?%?$/.test(w));
-  return numbers.length >= tokens.length * 0.25;
+  const numbers = tokens.filter((w) => /^[([\-–−\x01]?[\d.,]+[a-z]?[*†‡]*[)\]]?[*†‡]*%?$/.test(w));
+  return numbers.length >= tokens.length * share;
 }
 
 // Běžný text, nadpis nebo poznámka pod tabulkou: tam oblast tabulky či grafu končí.

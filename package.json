@@ -1,7 +1,7 @@
 {
   "name": "translatte",
   "productName": "TransLatte",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Lokální překladač PDF a dokumentů přes LM Studio",
   "author": "olda",
   "license": "UNLICENSED",

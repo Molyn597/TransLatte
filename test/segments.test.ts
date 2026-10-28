@@ -768,3 +768,16 @@ describe('odsazení prvního řádku jako hranice odstavce', () => {
     expect(blocks.some((b) => b.text.startsWith('Quarterly'))).toBe(false);
   });
 });
+
+describe('časopis se třemi sloupci (podle MIT Sloan Management Review)', () => {
+  it('úzký boční rámeček a dva sloupce textu čte každý zvlášť', () => {
+    const lines = (prefix: string, x: number, w: number, n: number) => Array.from({ length: n }, (_, i) => item(`${prefix} line number ${i} of text`, x, 100 + i * 12, w));
+    const items = [...lines('Side', 45, 110, 8), ...lines('Middle', 170, 215, 8), ...lines('Right', 400, 215, 8)];
+    const words = layoutToBlocks(items, 612, 3)
+      .map((b) => b.text)
+      .join(' ')
+      .split(' ')
+      .filter((w) => /^(Side|Middle|Right)$/.test(w));
+    expect(words).toEqual([...Array(8).fill('Side'), ...Array(8).fill('Middle'), ...Array(8).fill('Right')]);
+  });
+});
