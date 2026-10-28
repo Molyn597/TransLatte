@@ -207,6 +207,18 @@ export interface Settings {
   currency: Currency;
   /** Poslední kurz USD → CZK z ČNB (pro ceny i v korunách). */
   usdCzk?: { rate: number; date: string };
+  /** Uvítací průvodce už proběhl (chybějící hodnota = ještě ne). */
+  onboarded?: boolean;
+  /** Kdy naposledy proběhla kontrola aktualizací (ms). */
+  lastUpdateCheck?: number;
+}
+
+export interface UpdateCheck {
+  current: string;
+  latest?: { version: string; url: string };
+  newer: boolean;
+  /** Podařilo se zjistit nejnovější verzi. */
+  ok: boolean;
 }
 
 export interface LmStatus {
@@ -255,6 +267,11 @@ export interface Api {
   /** Ve stejném pořadí jako `paths`; nečitelný soubor = null. */
   fileInfo(paths: string[]): Promise<(FileInfo | null)[]>;
   usdCzk(): Promise<number | undefined>;
+  appVersion(): Promise<string>;
+  /** `auto`: automatická kontrola, nejvýš jednou denně. */
+  checkUpdate(auto?: boolean): Promise<UpdateCheck>;
+  /** Otevře v prohlížeči jen adresy na github.com. */
+  openUrl(url: string): Promise<void>;
   pickFiles(): Promise<string[]>;
   pathForFile(file: File): string;
   addJobs(paths: string[], options: JobOptions): Promise<void>;

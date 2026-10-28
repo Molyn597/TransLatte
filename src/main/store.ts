@@ -21,6 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
   remoteRates: { ocrPerPage: 6, translatePerKChar: 6, fixPerSegment: 3 },
   remoteCostFactors: {},
   currency: 'both',
+  onboarded: false,
 };
 
 /** Jen známé položky sazeb; starší nastavení měla místo fixPerSegment polishPerKChar. */

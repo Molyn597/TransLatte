@@ -25,6 +25,7 @@ import { status } from './lmstudio';
 import { openrouterStatus, refreshCatalog } from './provider';
 import { relayoutJob, translateRegion } from './pipeline';
 import { Queue, SUPPORTED } from './queue';
+import { checkUpdate } from './updates';
 import { Store } from './store';
 
 const isMac = process.platform === 'darwin';
@@ -195,7 +196,8 @@ function jobFile(job: Job, kind: OutputKind = 'docx') {
 function registerIpc() {
   ipcMain.handle('settings', () => store.settings());
   ipcMain.handle('settings-save', async (_e, settings: Settings) => {
-    await store.saveSettings(settings);
+    // lastUpdateCheck patří hlavnímu procesu; zastaralá kopie z okna ho nesmí přepsat.
+    await store.saveSettings({ ...settings, lastUpdateCheck: (await store.settings()).lastUpdateCheck });
     applyTheme(settings.theme);
     applyLang(settings.uiLang);
   });
@@ -219,6 +221,11 @@ function registerIpc() {
   });
   ipcMain.handle('file-info', (_e, paths: string[]) => fileInfo(paths));
   ipcMain.handle('usd-czk', () => usdCzk(store));
+  ipcMain.handle('app-version', () => app.getVersion());
+  ipcMain.handle('update-check', (_e, auto?: boolean) => checkUpdate(store, Boolean(auto)));
+  ipcMain.handle('open-url', async (_e, url: string) => {
+    if (typeof url === 'string' && url.startsWith('https://github.com/')) await shell.openExternal(url);
+  });
   ipcMain.handle('jobs-add', async (_e, paths: string[], options: JobOptions) => {
     const errors: string[] = [];
     for (const p of paths) {

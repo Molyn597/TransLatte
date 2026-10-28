@@ -22,6 +22,9 @@ import {
   STATUS_TEXT,
   toast,
 } from './dom';
+import { fillHelpDots, renderHelp, scrollToTopic } from './help-view';
+import { openWelcome } from './welcome';
+import type { HelpTopic } from '../shared/help';
 import { renderGlossary, renderSettings, setupGlossary } from './forms';
 
 declare global {
@@ -30,7 +33,7 @@ declare global {
   }
 }
 
-type View = 'home' | 'history' | 'detail' | 'glossary' | 'settings';
+type View = 'home' | 'history' | 'detail' | 'glossary' | 'help' | 'settings';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const ROLE_NAMES: Record<keyof Models, MessageKey> = { ocr: 'role.ocr', translate: 'role.translate', polish: 'role.polish' };
@@ -61,7 +64,39 @@ function show(next: View) {
   if (next === 'glossary') void renderGlossary();
   if (next === 'settings') void renderSettings(onSettingsSaved);
   if (next === 'history') renderHistory();
+  if (next === 'help') renderHelp(showWelcome);
   $('detail-body').closest('.main')?.scrollTo(0, 0);
+}
+
+/** Přepne na nápovědu a případně rovnou na kapitolu. */
+export function showHelp(topic?: HelpTopic) {
+  show('help');
+  if (topic) scrollToTopic(topic);
+}
+
+function showWelcome() {
+  openWelcome({
+    settings: () => settings,
+    setProvider: async (p) => {
+      settings.provider = p;
+      await window.api.saveSettings(settings);
+      lastStatus = undefined;
+      renderAll();
+      void refreshStatus();
+    },
+    save: () => window.api.saveSettings(settings),
+    openSettings: () => show('settings'),
+  });
+}
+
+async function checkUpdates() {
+  const r = await window.api.checkUpdate(true).catch(() => null);
+  if (!r?.newer || !r.latest) return;
+  const { version, url } = r.latest;
+  $('update-text').textContent = t('update.available', { version });
+  $('update-download').onclick = () => void window.api.openUrl(url);
+  $('update-dismiss').onclick = () => ($('update-bar').hidden = true);
+  $('update-bar').hidden = false;
 }
 
 async function openJob(id: string) {
@@ -119,7 +154,8 @@ function renderEngine() {
       h(
         'button',
         {
-          class: settings.provider === p ? 'provider active' : 'provider',
+          class: settings.provider === p ? 'segment active' : 'segment',
+          title: t(`home.provider.${p}Desc`),
           role: 'radio',
           'aria-checked': String(settings.provider === p),
           onclick: async () => {
@@ -131,8 +167,7 @@ function renderEngine() {
             void refreshStatus();
           },
         },
-        h('span', { class: 'provider-title' }, t(`home.provider.${p}`)),
-        h('span', { class: 'provider-desc' }, t(`home.provider.${p}Desc`)),
+        t(`home.provider.${p}`),
       ),
     ),
   );
@@ -145,9 +180,14 @@ function renderEngine() {
         : h('span', { class: 'chip warn' }, icon(ICONS.alert), t('home.keyMissing'))
       : h('span', { class: lastStatus.online || lastStatus.cli ? 'chip ok' : 'chip warn' }, lastStatus.online ? t('lm.running') : lastStatus.cli ? t('home.lmReady') : t('lm.notFound'));
   $('engine').replaceChildren(
-    h('div', { class: 'engine-label' }, t(online ? 'home.engineOnline' : 'home.engineLocal')),
-    h('div', { class: 'engine-models' }, names.join(' + ')),
-    h('div', { class: 'chips' }, status, h('button', { class: 'link', onclick: () => show('settings') }, t('home.changeModel'))),
+    h(
+      'div',
+      { class: 'engine-line' },
+      h('span', { class: 'engine-models', title: names.join(' + ') }, names.join(' + ')),
+      status,
+      h('button', { class: 'link', onclick: () => show('settings') }, t('home.changeModel')),
+    ),
+    h('div', { class: 'muted small' }, t(`home.provider.${settings.provider}Desc`)),
   );
   renderStart();
 }
@@ -184,7 +224,7 @@ function renderModes() {
       h(
         'button',
         {
-          class: settings.mode === mode ? 'mode active' : 'mode',
+          class: settings.mode === mode ? 'segment active' : 'segment',
           role: 'radio',
           'aria-checked': String(settings.mode === mode),
           onclick: async () => {
@@ -194,12 +234,12 @@ function renderModes() {
             await window.api.saveSettings(settings);
           },
         },
-        h('span', { class: 'mode-title' }, icon(ICONS[mode]), t(MODES[mode].title)),
-        h('span', { class: 'mode-desc' }, t(MODES[mode].desc)),
-        h('span', { class: 'mode-time' }, modeTime(mode)),
+        icon(ICONS[mode]),
+        t(MODES[mode].title),
       ),
     ),
   );
+  $('mode-desc').textContent = `${t(MODES[settings.mode].desc)} · ${modeTime(settings.mode)}`;
 }
 
 /** Odhad ceny: vždy pro typický článek v aktuálním režimu, po přidání souborů i pro ně (s režimem a rozsahem, se kterými se zařadily). */
@@ -282,6 +322,8 @@ function fileMeta(info: FileInfo | null | undefined) {
 
 function renderPending() {
   $('pending').hidden = !pending.length;
+  // S vybranými soubory se plocha zmenší na řádek „Přidat další soubory“.
+  $('dropzone').classList.toggle('compact', pending.length > 0);
   $('pending-list').replaceChildren(
     ...pending.map((p) =>
       h(
@@ -424,6 +466,8 @@ function renderHistory() {
   const list = sorted().filter((j) => !query || j.name.toLowerCase().includes(query));
   $('history-list').replaceChildren(...list.map(jobRow));
   $('history-empty').hidden = list.length > 0;
+  // Při prázdném hledání v neprázdné historii se nabídka prvního překladu nezobrazuje.
+  $('history-empty-action').hidden = jobs.size > 0;
 }
 
 const applyTheme = () => (document.documentElement.dataset.theme = settings.theme);
@@ -459,6 +503,8 @@ async function init() {
   renderAll();
   renderHome();
   $('history-search').addEventListener('input', renderHistory);
+  $('history-empty-action').addEventListener('click', () => show('home'));
+  fillHelpDots(showHelp);
   const pageRange = $<HTMLInputElement>('page-range');
   pageRange.addEventListener('input', () => {
     pageRange.classList.toggle('invalid', !isValidPageRange(pageRange.value));
@@ -498,6 +544,8 @@ async function init() {
   });
   window.api.onOpenJob((id) => void openJob(id));
 
+  if (!settings.onboarded) showWelcome();
+  void checkUpdates();
   await refreshStatus();
   setInterval(() => void refreshStatus(), 20000);
   window.addEventListener('focus', () => void refreshStatus());
