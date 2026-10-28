@@ -66,6 +66,19 @@
             <span class="drop-sub" data-i18n="home.dropSub">nebo klikni a vyber je · PDF, DOCX, TXT, MD</span>
           </button>
 
+          <div class="pending" id="pending" hidden>
+            <div class="row pending-head">
+              <div class="section-title" data-i18n="home.pending">K překladu</div>
+              <button class="btn" id="pending-clear" data-i18n="home.pendingClear">Odebrat vše</button>
+            </div>
+            <div class="pending-list" id="pending-list"></div>
+          </div>
+
+          <div class="engine-row">
+            <div class="provider-switch" id="provider-switch" role="radiogroup" aria-label="Kde překládat" data-i18n-aria-label="home.provider"></div>
+            <div class="engine" id="engine"></div>
+          </div>
+
           <div class="options">
             <div class="modes" id="modes" role="radiogroup" aria-label="Režim" data-i18n-aria-label="home.mode"></div>
             <div class="langs">
@@ -88,7 +101,11 @@
               <span data-i18n="home.pickParagraphs">Vybrat odstavce před překladem</span>
             </label>
           </div>
-          <p class="cost-estimate" id="cost-estimate" hidden></p>
+          <div class="start-row">
+            <p class="cost-estimate" id="cost-estimate" hidden></p>
+            <span class="muted small" id="start-hint"></span>
+            <button class="btn primary start-btn" id="start" disabled data-i18n="home.start">Přeložit</button>
+          </div>
 
           <div class="section-title" id="active-title" data-i18n="home.active" hidden>Probíhá</div>
           <div class="job-cards" id="active-jobs"></div>

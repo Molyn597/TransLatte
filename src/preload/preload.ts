@@ -7,7 +7,7 @@ const api: Api = {
   saveSettings: (settings) => ipcRenderer.invoke('settings-save', settings),
   getGlossary: () => ipcRenderer.invoke('glossary'),
   saveGlossary: (entries) => ipcRenderer.invoke('glossary-save', entries),
-  lmStatus: () => ipcRenderer.invoke('lm-status'),
+  lmStatus: (provider) => ipcRenderer.invoke('lm-status', provider),
   refreshCatalog: () => ipcRenderer.invoke('catalog-refresh').then(() => undefined),
   hasApiKey: () => ipcRenderer.invoke('api-key-has'),
   setApiKey: (key) => ipcRenderer.invoke('api-key-set', key),

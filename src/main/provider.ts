@@ -87,7 +87,8 @@ export function parseCatalog(raw: RawModel[]): CatalogModel[] {
       const output = perMillion(m.pricing?.completion);
       return {
         id: m.id,
-        name: m.name ?? m.id,
+        // „DeepSeek: DeepSeek V4.1 Flash“ → bez zbytečného jména výrobce.
+        name: (m.name ?? m.id).replace(/^[^:]+:\s*/, ''),
         vision: Boolean(m.architecture?.input_modalities?.includes('image')),
         price: Number.isFinite(input) && Number.isFinite(output) ? { input, output } : undefined,
         context: m.context_length || undefined,

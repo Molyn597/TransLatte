@@ -67,6 +67,8 @@ function meta(job: Job) {
   if (job.pages) chips.push(h('span', { class: 'chip' }, t('detail.pages', { count: job.pages })));
   if (jobDuration(job)) chips.push(h('span', { class: 'chip' }, jobDuration(job)));
   if (isOnline(job)) chips.push(h('span', { class: 'chip' }, t('job.online')));
+  // Čím se překládalo (staré úlohy model neznají).
+  if (job.models) chips.push(h('span', { class: 'chip' }, [...new Set(Object.values(job.models))].map((id) => id.split('/').pop()).join(' + ')));
   if (job.warnings) chips.push(h('span', { class: 'chip warn' }, t('job.warnings', { count: job.warnings })));
   return chips;
 }

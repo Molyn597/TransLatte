@@ -3,7 +3,7 @@ import { formatUsd } from '../shared/estimate';
 import { locale, t, type MessageKey, type UiLangSetting } from '../shared/i18n';
 import { activeRates, FAST_REMOTE_MODEL, isFreeModel, isOnline, RECOMMENDED_REMOTE_MODEL } from '../shared/provider';
 import { catalogRows, filterCatalog, formatContext, isFree, sharedModel, sortCatalog, visionWarnings } from '../shared/catalog-view';
-import type { Currency, GlossaryEntry, LmStatus, ModelPrice, Models, Provider, Settings, Theme } from '../shared/types';
+import type { Currency, GlossaryEntry, LmStatus, ModelPrice, Models, Settings, Theme } from '../shared/types';
 import { duration, h, icon, ICONS, toast } from './dom';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -90,7 +90,7 @@ function toggle(label: string, hint: string, checked: boolean, onChange: (v: boo
 }
 
 export async function renderSettings(onSaved: (s: Settings) => void) {
-  const [settings, lm] = await Promise.all([window.api.getSettings(), window.api.lmStatus()]);
+  const [settings, lm, remote] = await Promise.all([window.api.getSettings(), window.api.lmStatus('local'), window.api.lmStatus('openrouter')]);
   const save = async () => {
     await window.api.saveSettings(settings);
     onSaved(settings);
@@ -105,26 +105,11 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
   });
 
   const rerender = () => renderSettings(onSaved);
-  const providerSelect = h('select');
-  for (const value of ['local', 'openrouter'] as Provider[]) {
-    providerSelect.append(h('option', { value, selected: settings.provider === value }, t(`settings.provider.${value}`)));
-  }
-  providerSelect.addEventListener('change', async () => {
-    settings.provider = providerSelect.value as Provider;
-    await save();
-    await rerender();
-  });
-  const providerGroup = h(
-    'section',
-    { class: 'setting-group' },
-    h('h2', {}, t('settings.provider')),
-    h('label', { class: 'field' }, h('span', {}, t('settings.provider')), providerSelect),
-  );
-
   const modelGroup = h(
     'section',
     { class: 'setting-group' },
-    h('h2', {}, 'LM Studio'),
+    groupTitle(t('settings.local.title'), settings.provider === 'local'),
+    localSummary(settings, lm),
     h('label', { class: 'field' }, h('span', {}, t('settings.serverUrl')), url),
   );
   for (const role of ROLES) modelGroup.append(modelSelect(role, settings, lm, save));
@@ -171,8 +156,7 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
   );
 
   $('settings').replaceChildren(
-    providerGroup,
-    isOnline(settings) ? remoteGroup(settings, lm, save, rerender) : modelGroup,
+    ...(isOnline(settings) ? [remoteGroup(settings, remote, save, rerender), modelGroup] : [modelGroup, remoteGroup(settings, remote, save, rerender)]),
     h(
       'section',
       { class: 'setting-group' },
@@ -194,6 +178,48 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
     ),
     rates,
   );
+}
+
+function groupTitle(text: string, active: boolean) {
+  return h('h2', {}, text, active ? h('span', { class: 'chip accent in-use-now' }, t('settings.inUseNow')) : '');
+}
+
+function selectedCard(label: string, body: (Node | string)[], chips: Node[] = []) {
+  return h(
+    'div',
+    { class: 'selected-model' },
+    h('div', { class: 'engine-label' }, label),
+    ...body,
+    chips.length ? h('div', { class: 'chips' }, ...chips) : '',
+  );
+}
+
+function localSummary(settings: Settings, lm: LmStatus) {
+  const name = (key: string) => lm.models.find((m) => m.key === key)?.name ?? key;
+  return selectedCard(
+    t('settings.local.selected'),
+    ROLES.map((role) => h('div', { class: 'selected-role' }, h('span', { class: 'selected-role-name' }, t(role.title)), h('span', { class: 'selected-model-name' }, name(settings.models[role.key])))),
+  );
+}
+
+function remoteSummary(settings: Settings, lm: LmStatus) {
+  const used = sharedModel(settings.remoteModels);
+  const ids = [...new Set(ROLES.map((r) => settings.remoteModels[r.key]))];
+  const found = ids.map((id) => lm.models.find((m) => m.key === id));
+  const names = ids.map((id, i) => found[i]?.name ?? id).join(' + ');
+  const chip = (text: string, cls = '') => h('span', { class: `chip ${cls}` }, text);
+  const m = used ? found[0] : undefined;
+  const chips: Node[] = [];
+  if (found.length && found.every(Boolean)) {
+    chips.push(found.every((f) => f!.vision) ? chip(t('settings.remote.vision')) : chip(t('settings.remote.noVisionTag'), 'warn'));
+  }
+  if (m?.price) chips.push(chip(isFree(m) ? t('settings.remote.free') : t('settings.remote.perM', { input: usd(m.price.input), output: usd(m.price.output) })));
+  chips.push(
+    lm.hasKey
+      ? h('span', { class: 'chip ok' }, icon(ICONS.check), t('settings.remote.keyOk'))
+      : h('span', { class: 'chip warn' }, icon(ICONS.alert), t('settings.remote.keyMissing')),
+  );
+  return selectedCard(t('settings.remote.selected'), [h('div', { class: 'selected-model-name big' }, names)], chips);
 }
 
 function modelSelect(
@@ -243,7 +269,7 @@ function currencySelect(settings: Settings, save: () => Promise<void>, rerender:
 }
 
 function remoteGroup(settings: Settings, lm: LmStatus, save: () => Promise<void>, rerender: () => Promise<void>) {
-  const key = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: t('settings.remote.keyPlaceholder') });
+  const key = h('input', { type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: lm.hasKey ? t('settings.remote.keyPlaceholderSaved') : t('settings.remote.keyPlaceholder') });
   const run = (action: () => Promise<void>) => async () => {
     try {
       await action();
@@ -257,11 +283,12 @@ function remoteGroup(settings: Settings, lm: LmStatus, save: () => Promise<void>
   const group = h(
     'section',
     { class: 'setting-group' },
-    h('h2', {}, 'OpenRouter'),
+    groupTitle(t('settings.remote.title'), settings.provider === 'openrouter'),
+    remoteSummary(settings, lm),
     h('p', { class: 'warn-box' }, t('settings.remote.privacy')),
     h('label', { class: 'field' }, h('span', {}, t('settings.remote.key')), key),
     h('div', { class: 'row gap' }, saveKey, lm.hasKey ? removeKey : ''),
-    h('p', { class: 'muted small' }, lm.hasKey ? t('settings.remote.keySaved') : t('settings.remote.keyNone')),
+    h('p', { class: lm.hasKey ? 'ok-box' : 'warn-box' }, lm.hasKey ? t('settings.remote.keySaved') : t('settings.remote.keyNone')),
     currencySelect(settings, save, rerender),
   );
   if (!lm.models.length) {
@@ -283,7 +310,7 @@ function remoteGroup(settings: Settings, lm: LmStatus, save: () => Promise<void>
     const select = h('select');
     select.addEventListener('change', () => {
       settings.remoteModels[role.key] = select.value;
-      void save().then(update);
+      void save().then(rerender);
     });
     const fillOne = () => {
       const current = settings.remoteModels[role.key];
@@ -299,7 +326,7 @@ function remoteGroup(settings: Settings, lm: LmStatus, save: () => Promise<void>
 
   const useModel = (id: string) => {
     for (const role of ROLES) settings.remoteModels[role.key] = id;
-    void save().then(update);
+    void save().then(rerender);
   };
   const update = () => {
     const { rows, total } = catalogRows(lm.models, cutoff());

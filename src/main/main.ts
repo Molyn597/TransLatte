@@ -16,7 +16,7 @@ import {
 import { resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import { findRegion, normalizeCrop } from '../shared/regions';
-import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, RegionTranslation, Settings, Stage } from '../shared/types';
+import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, Provider, RegionTranslation, Settings, Stage } from '../shared/types';
 import { isOnline } from '../shared/provider';
 import { fileInfo } from './fileinfo';
 import { usdCzk } from './fx';
@@ -201,9 +201,9 @@ function registerIpc() {
   });
   ipcMain.handle('glossary', () => store.glossary());
   ipcMain.handle('glossary-save', (_e, entries: GlossaryEntry[]) => store.saveGlossary(entries));
-  ipcMain.handle('lm-status', async () => {
+  ipcMain.handle('lm-status', async (_e, provider?: Provider) => {
     const s = await store.settings();
-    return isOnline(s) ? openrouterStatus(s.remoteModels, await readKey(store.root)) : status(s.apiUrl, s.models);
+    return isOnline({ provider: provider ?? s.provider }) ? openrouterStatus(s.remoteModels, await readKey(store.root)) : status(s.apiUrl, s.models);
   });
   ipcMain.handle('catalog-refresh', () => refreshCatalog());
   // Klíč se do okna nikdy nevrací, jen informace, zda existuje.

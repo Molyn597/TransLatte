@@ -1390,3 +1390,217 @@ input:focus {
   margin: 12px 0 0;
   font-size: 13px;
 }
+
+/* Výběr souborů a poskytovatele před překladem */
+
+.pending {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pending-head {
+  justify-content: space-between;
+}
+
+.pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--pill);
+}
+
+.pending-row > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.pending-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engine-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.provider-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.provider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--pill);
+  text-align: left;
+}
+
+.provider:hover {
+  border-color: var(--accent);
+}
+
+.provider.active {
+  border: 2px solid var(--accent);
+  padding: 11px 13px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.provider-title {
+  font-weight: 600;
+}
+
+.provider-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.provider.active .provider-desc {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.engine {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: var(--strong);
+  color: var(--on-strong);
+}
+
+.engine-label {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.engine-models {
+  font-size: 16px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engine .chips {
+  align-items: center;
+}
+
+.chip.ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.chip.ok svg,
+.chip.warn svg {
+  width: 12px;
+  height: 12px;
+  vertical-align: -1px;
+  margin-right: 4px;
+}
+
+.link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.start-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.start-row .cost-estimate {
+  margin: 0 auto 0 0;
+}
+
+.start-btn {
+  padding: 12px 28px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  .engine-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Souhrn vybraných modelů v nastavení */
+.selected-model {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: var(--strong);
+  color: var(--on-strong);
+}
+
+.selected-model .engine-label {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.selected-model-name {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.selected-model-name.big {
+  font-size: 20px;
+}
+
+.selected-role {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.selected-role-name {
+  opacity: 0.75;
+}
+
+.in-use-now {
+  margin-left: 10px;
+  vertical-align: middle;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ok-box {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--success-soft);
+  color: var(--success);
+}

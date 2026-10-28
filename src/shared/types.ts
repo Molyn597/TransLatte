@@ -105,6 +105,8 @@ export interface Job {
   resume?: boolean;
   /** Poskytovatel modelů, který úlohu zpracoval (bez hodnoty = lokální). */
   provider?: Provider;
+  /** Modely, které úlohu zpracovaly (pro zobrazení). */
+  models?: Models;
   /** Cena za online modely v USD (součet za úlohu i překlady oblastí). */
   cost?: number;
   /** Odhad ceny po přečtení dokumentu (USD, s koeficientem) a bez něj pro zpřesnění koeficientu. */
@@ -128,6 +130,8 @@ export interface JobOptions {
   targetLang: string;
   pageRange?: string;
   pickParagraphs?: boolean;
+  /** Bez hodnoty = podle nastavení v okamžiku spuštění. */
+  provider?: Provider;
 }
 
 /** Oblast stránky přeložená na vyžádání (study.json ve složce úlohy). */
@@ -221,7 +225,7 @@ export interface Api {
   saveSettings(settings: Settings): Promise<void>;
   getGlossary(): Promise<GlossaryEntry[]>;
   saveGlossary(entries: GlossaryEntry[]): Promise<void>;
-  lmStatus(): Promise<LmStatus>;
+  lmStatus(provider?: Provider): Promise<LmStatus>;
   /** Znovu stáhne katalog OpenRouter mimo mezipaměť. */
   refreshCatalog(): Promise<void>;
   /** API klíč OpenRouter žije jen v hlavním procesu; do okna se nikdy nevrací. */
@@ -229,7 +233,8 @@ export interface Api {
   setApiKey(key: string): Promise<void>;
   clearApiKey(): Promise<void>;
   /** Rozsah souborů pro odhad ceny; nečitelný soubor se vynechá. */
-  fileInfo(paths: string[]): Promise<FileInfo[]>;
+  /** Ve stejném pořadí jako `paths`; nečitelný soubor = null. */
+  fileInfo(paths: string[]): Promise<(FileInfo | null)[]>;
   usdCzk(): Promise<number | undefined>;
   pickFiles(): Promise<string[]>;
   pathForFile(file: File): string;

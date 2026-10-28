@@ -21,12 +21,9 @@ async function info(file: string): Promise<FileInfo | undefined> {
   }
 }
 
-/** Informace pro odhad ceny; soubor, který nejde přečíst, se vynechá (chybu ohlásí až přidání úlohy). */
-export async function fileInfo(paths: string[]): Promise<FileInfo[]> {
-  const out: FileInfo[] = [];
-  for (const file of paths) {
-    const i = await info(file).catch(() => undefined);
-    if (i) out.push(i);
-  }
+/** Informace pro odhad ceny; soubor, který nejde přečíst, je null (chybu ohlásí až přidání úlohy). */
+export async function fileInfo(paths: string[]): Promise<(FileInfo | null)[]> {
+  const out: (FileInfo | null)[] = [];
+  for (const file of paths) out.push((await info(file).catch(() => undefined)) ?? null);
   return out;
 }

@@ -4,7 +4,7 @@ import { CHARS_PER_PAGE } from '../shared/cost';
 import { estimateFiles, formatUsd, setCurrency, setCzkRate } from '../shared/estimate';
 import { isValidPageRange } from '../shared/pages';
 import { activeModels, activeRates, isOnline } from '../shared/provider';
-import type { Api, FileInfo, Job, LmStatus, Mode, Models, Settings } from '../shared/types';
+import type { Api, FileInfo, Job, LmStatus, Mode, Models, Provider, Settings } from '../shared/types';
 import { closeDetail, detailJobId, openDetail, setupDetail, updateDetail } from './detail';
 import {
   applyI18n,
@@ -42,9 +42,10 @@ let settings: Settings;
 let jobs = new Map<string, Job>();
 let view: View = 'home';
 let previousView: View = 'home';
-// Soubory naposledy přidané z úvodní stránky i s volbami, se kterými se zařadily (pro odhad ceny).
-let lastBatch: { files: FileInfo[]; pageRange: string; mode: Mode } | undefined;
+// Vybrané soubory čekají na tlačítko Přeložit; info se dotáhne kvůli počtu stran a odhadu ceny.
+let pending: { path: string; name: string; info?: FileInfo | null }[] = [];
 const TYPICAL_PAGES = 15;
+let lastStatus: LmStatus | undefined;
 let catalog: LmStatus['models'] = [];
 
 // ---------- Navigace ----------
@@ -71,6 +72,9 @@ async function openJob(id: string) {
 
 async function refreshStatus() {
   const lm = await window.api.lmStatus();
+  // Odpověď z doby před přepnutím poskytovatele.
+  if ((lm.provider ?? 'local') !== settings.provider) return;
+  lastStatus = lm;
   const dot = $('status-dot');
   dot.className = `status-dot ${lm.online ? 'online' : 'offline'}`;
   const remote = lm.provider === 'openrouter';
@@ -89,6 +93,7 @@ async function refreshStatus() {
         : t('lm.notFound');
   catalog = lm.models;
   renderCost();
+  renderEngine();
   const models = activeModels(settings);
   $('lm-models').replaceChildren(
     ...(Object.keys(ROLE_NAMES) as (keyof Models)[]).map((role) => {
@@ -102,6 +107,63 @@ async function refreshStatus() {
       );
     }),
   );
+}
+
+const modelName = (id: string) => catalog.find((m) => m.key === id)?.name ?? id.split('/').pop()!;
+
+/** Výrazně ukáže, čím se bude překládat, a u online i stav API klíče. */
+function renderEngine() {
+  const online = isOnline(settings);
+  $('provider-switch').replaceChildren(
+    ...(['local', 'openrouter'] as Provider[]).map((p) =>
+      h(
+        'button',
+        {
+          class: settings.provider === p ? 'provider active' : 'provider',
+          role: 'radio',
+          'aria-checked': String(settings.provider === p),
+          onclick: async () => {
+            if (settings.provider === p) return;
+            settings.provider = p;
+            await window.api.saveSettings(settings);
+            lastStatus = undefined;
+            renderAll();
+            void refreshStatus();
+          },
+        },
+        h('span', { class: 'provider-title' }, t(`home.provider.${p}`)),
+        h('span', { class: 'provider-desc' }, t(`home.provider.${p}Desc`)),
+      ),
+    ),
+  );
+  const names = [...new Set(Object.values(activeModels(settings)))].map(modelName);
+  const status = !lastStatus
+    ? h('span', { class: 'chip' }, t('lm.checking'))
+    : online
+      ? lastStatus.hasKey
+        ? h('span', { class: 'chip ok' }, icon(ICONS.check), t('home.keySaved'))
+        : h('span', { class: 'chip warn' }, icon(ICONS.alert), t('home.keyMissing'))
+      : h('span', { class: lastStatus.online || lastStatus.cli ? 'chip ok' : 'chip warn' }, lastStatus.online ? t('lm.running') : lastStatus.cli ? t('home.lmReady') : t('lm.notFound'));
+  $('engine').replaceChildren(
+    h('div', { class: 'engine-label' }, t(online ? 'home.engineOnline' : 'home.engineLocal')),
+    h('div', { class: 'engine-models' }, names.join(' + ')),
+    h('div', { class: 'chips' }, status, h('button', { class: 'link', onclick: () => show('settings') }, t('home.changeModel'))),
+  );
+  renderStart();
+}
+
+function renderStart() {
+  const noKey = isOnline(settings) && lastStatus?.hasKey === false;
+  const button = $<HTMLButtonElement>('start');
+  button.disabled = !pending.length || noKey;
+  button.textContent = pending.length > 1 ? t('home.startMany', { count: pending.length }) : t('home.start');
+  $('start-hint').textContent = noKey ? t('home.keyMissingHint') : pending.length ? '' : t('home.startHint');
+}
+
+function renderAll() {
+  renderModes();
+  renderEngine();
+  renderCost();
 }
 
 // ---------- Domů ----------
@@ -161,8 +223,10 @@ function renderCost() {
       typical.free ? t('home.costTypicalFree', { model: names }) : t('home.costTypical', { amount: formatUsd(typical.usd ?? 0), pages: TYPICAL_PAGES, model: names }),
     ),
   ];
-  if (lastBatch) {
-    const est = estimateFiles({ ...lastBatch, models, prices, factors });
+  const files = pending.map((p) => p.info).filter((i): i is FileInfo => Boolean(i));
+  if (files.length) {
+    const pageRange = $<HTMLInputElement>('page-range').value;
+    const est = estimateFiles({ files, pageRange: isValidPageRange(pageRange) ? pageRange : '', mode: settings.mode, models, prices, factors });
     const pages = t('cost.pages', { count: est.pages });
     const known = est.free || est.usd !== undefined;
     const line = !known ? t('home.costDocxOnly') : est.free || est.usd === 0 ? t('home.costFree', { pages }) : t('home.cost', { amount: formatUsd(est.usd!), pages });
@@ -170,12 +234,6 @@ function renderCost() {
   }
   el.replaceChildren(...lines);
   el.hidden = false;
-}
-
-async function showCost(paths: string[], pageRange: string) {
-  const files = isOnline(settings) ? await window.api.fileInfo(paths).catch(() => []) : [];
-  lastBatch = files.length ? { files, pageRange, mode: settings.mode } : undefined;
-  renderCost();
 }
 
 function fillLanguages() {
@@ -198,12 +256,61 @@ function fillLanguages() {
 }
 
 async function addFiles(paths: string[]) {
-  if (!paths.length) return;
+  const fresh = [...new Set(paths)].filter((p) => !pending.some((x) => x.path === p));
+  if (!fresh.length) return;
+  const added: typeof pending = fresh.map((path) => ({ path, name: path.split(/[\\/]/).pop()! }));
+  pending.push(...added);
+  renderPending();
+  const infos = await window.api.fileInfo(fresh).catch(() => []);
+  added.forEach((p, i) => (p.info = infos[i] ?? null));
+  renderPending();
+}
+
+function fileMeta(info: FileInfo | null | undefined) {
+  if (info === undefined) return '…';
+  if (!info) return t('home.fileUnreadable');
+  if (info.kind === 'pdf') return t('cost.pages', { count: info.pages });
+  if (info.kind === 'text') return t('home.fileChars', { chars: info.chars.toLocaleString(getLang()) });
+  return 'Word';
+}
+
+function renderPending() {
+  $('pending').hidden = !pending.length;
+  $('pending-list').replaceChildren(
+    ...pending.map((p) =>
+      h(
+        'div',
+        { class: 'pending-row' },
+        icon(ICONS.file),
+        h('span', { class: 'pending-name', title: p.path }, p.name),
+        h('span', { class: 'muted small' }, fileMeta(p.info)),
+        h(
+          'button',
+          {
+            class: 'circle-btn small',
+            title: t('home.pendingRemove'),
+            onclick: () => {
+              pending = pending.filter((x) => x !== p);
+              renderPending();
+            },
+          },
+          icon(ICONS.x),
+        ),
+      ),
+    ),
+  );
+  renderCost();
+  renderStart();
+}
+
+async function startPending() {
+  if (!pending.length) return;
   const pageRange = $<HTMLInputElement>('page-range').value;
   if (!isValidPageRange(pageRange)) {
     toast(t('home.badRange'), true);
     return;
   }
+  const paths = pending.map((p) => p.path);
   try {
     await window.api.addJobs(paths, {
       mode: settings.mode,
@@ -211,8 +318,10 @@ async function addFiles(paths: string[]) {
       targetLang: settings.targetLang,
       pageRange,
       pickParagraphs: $<HTMLInputElement>('pick-paragraphs').checked,
+      provider: settings.provider,
     });
-    void showCost(paths, pageRange);
+    pending = [];
+    renderPending();
     toast(paths.length === 1 ? t('home.queued') : t('home.queuedMany', { count: paths.length }));
   } catch (e) {
     toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), true);
@@ -279,7 +388,7 @@ function jobRow(job: Job) {
       h('div', { class: 'job-row-name' }, `${job.name}${job.ext}`),
       h('div', { class: 'job-row-meta' }, parts.filter(Boolean).join(' · ')),
     ),
-    isOnline(job) ? h('span', { class: 'chip' }, t('job.online')) : '',
+    isOnline(job) ? h('span', { class: 'chip' }, job.models ? `${t('job.online')} · ${modelName(job.models.translate)}` : t('job.online')) : '',
     job.warnings ? h('span', { class: 'chip warn' }, t('job.warnings', { count: job.warnings })) : job.status === 'error' ? h('span', { class: 'chip err' }, t('status.error')) : '',
   );
 }
@@ -316,8 +425,7 @@ function onSettingsSaved(next: Settings) {
   settings = next;
   setCurrency(settings.currency);
   applyTheme();
-  renderModes();
-  renderCost();
+  renderAll();
   void refreshStatus();
 }
 
@@ -341,12 +449,18 @@ async function init() {
   setupGlossary();
   setupDrop();
   fillLanguages();
-  renderModes();
+  renderAll();
   renderHome();
   $('history-search').addEventListener('input', renderHistory);
   const pageRange = $<HTMLInputElement>('page-range');
   pageRange.addEventListener('input', () => {
     pageRange.classList.toggle('invalid', !isValidPageRange(pageRange.value));
+    renderCost();
+  });
+  $('start').addEventListener('click', () => void startPending());
+  $('pending-clear').addEventListener('click', () => {
+    pending = [];
+    renderPending();
   });
   // Dnešní kurz ČNB se dotáhne na pozadí; do té doby platí poslední uložený.
   void window.api.usdCzk().catch(() => undefined).then((rate) => {

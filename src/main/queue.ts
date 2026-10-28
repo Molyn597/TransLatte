@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { t } from '../shared/i18n';
 import { calibrate, costKey } from '../shared/cost';
-import { activeRates, isOnline } from '../shared/provider';
+import { activeModels, activeRates, isOnline } from '../shared/provider';
 import type { Job, JobOptions, Mode, Rates } from '../shared/types';
 import { unloadAll } from './lmstudio';
 import { runJob, type Measured } from './pipeline';
@@ -200,8 +200,11 @@ export class Queue {
       stageStart = Date.now();
     };
     try {
-      const settings = await this.store.settings();
+      const current = await this.store.settings();
+      // Poskytovatel zvolený při přidání platí, i když se mezitím přepnul.
+      const settings = job.provider ? { ...current, provider: job.provider } : current;
       job.provider = settings.provider;
+      job.models = activeModels(settings);
       const measured = await runJob({
         job,
         settings,
