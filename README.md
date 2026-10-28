@@ -1,13 +1,41 @@
 # TransLatte
 
-A local translator for PDFs and documents. It translates on your own computer using models in [LM Studio](https://lmstudio.ai), so your text never leaves the machine. The output is a Word document (.docx), Markdown text and, for PDFs, a translated PDF that looks like the original.
+**Translate academic papers, scans and documents for (almost) nothing — and keep the original layout.**
+
+TransLatte translates PDFs (including scans), Word, TXT and Markdown files. You get a Word document, Markdown text and, for PDFs, a translated PDF that looks like the original: same layout, images and tables. It runs either **for free on your own computer** (models in [LM Studio](https://lmstudio.ai)) or **online for a few cents** through [OpenRouter](https://openrouter.ai).
+
+## Why TransLatte
+
+- **Built for students on a budget.** Paid translators such as [DeepL Pro](https://www.deepl.com/pro) are monthly subscriptions, and document translation is limited on the cheaper plans. TransLatte has no subscription:
+  - **Locally it costs nothing.** The models run on your computer and your text never leaves it.
+  - **Online you pay only for what you translate.** With the recommended model (DeepSeek V4.1 Flash) a 15–20-page journal article costs around **$0.02 (≈ 0.5 CZK)**. A $10 OpenRouter credit is enough for hundreds of articles.
+- **Made for academic texts.** It keeps paragraphs, headings, footnotes, citations, links and tables, fixes typical machine-translation errors and respects your glossary of technical terms.
+- **You see what you'll pay.** The cost is estimated before you start (in USD, CZK or both) and the real cost is shown when the job finishes.
+
+> Prices are approximate and depend on the model and the document; check current prices of paid services on their websites.
+
+## Features
+
+- **PDF in, PDF out:** a translated PDF with the original layout, plus Word (.docx) and Markdown. Works with digital PDFs, scans (OCR), password-free encrypted PDFs and multi-column journal and magazine layouts.
+- **Locally or online:** switch on the home screen between local models (free, private) and online models via OpenRouter (fast, pay per use). The active model and whether your API key is saved are always visible.
+- **Three modes:** Fast, Balanced (OCR of every page, check and fix) and Quality (also reads the topic and author for correct terminology and grammatical gender).
+- **Tables and figures from the original:** a table or chart with a caption (Table 1, Figure 2…) can be kept exactly as in the original as an image; only the caption is translated.
+- **Pick what to translate:** choose a page range or tick individual paragraphs; translate more later.
+- **Check and fix:** flags untranslated words, likely typos, missing glossary terms and truncated sentences, and fixes them in Balanced and Quality modes.
+- **Glossary:** binding translations of technical terms used in every job.
+- **Review side by side:** paragraph-by-paragraph comparison, the translated PDF next to the original, and translation of any selected area of a page (e.g. a chart).
+- **Queue:** add several files at once; they are translated one after another in the background.
+- **Easy to start:** a short welcome guide on first launch, built-in Help with “?” hints next to the options, and an update notice when a new version is released.
+- **Czech and English interface**, light, dark and monochrome themes; macOS and Windows.
 
 ## What you need
 
 - **macOS** (Apple Silicon or Intel) or **Windows 10/11** (x64 or ARM).
-- **A Mac with 16 GB+ memory, or a PC with an 8 GB+ VRAM graphics card and 16 GB+ RAM.** See [Hardware requirements](#hardware-requirements).
-- **About 20 GB of free disk space** for the models.
-- **LM Studio** with the models downloaded (see below).
+- **Online mode only:** any such computer and an [OpenRouter](https://openrouter.ai) account with a little credit. No LM Studio and no powerful hardware needed.
+- **Local mode:**
+  - a Mac with 16 GB+ memory, or a PC with an 8 GB+ VRAM graphics card and 16 GB+ RAM (see [Hardware requirements](#hardware-requirements));
+  - about 20 GB of free disk space for the models;
+  - **LM Studio** with the models downloaded (see below).
 
 ## Hardware requirements
 
@@ -28,7 +56,7 @@ These requirements are estimates. They have been verified on a 16 GB Apple Silic
 
 ## Installation
 
-### 1. LM Studio and models
+### 1. LM Studio and models (local mode only)
 
 1. Download and install LM Studio from <https://lmstudio.ai> and run it once.
 2. Open the model search in LM Studio (magnifier icon on the left) and download these models:
@@ -51,19 +79,24 @@ Download the installer from [Releases](https://github.com/Molyn597/TransLatte/re
 
 ### 3. First run
 
-The connection status to LM Studio is shown in the left sidebar (the **LM Studio** item). In **Settings** each role (OCR, translation, fixes) has a model selected. If you downloaded the models from the table, everything is set. Change the server address (`http://localhost:1234`) only if LM Studio runs on another port or machine. The app language (Czech or English, by default following the system) can be changed in **Settings → App**.
+A short welcome guide asks whether you want to translate locally or online; you can change it any time on the home screen. For online mode paste your OpenRouter API key in **Settings** and you're done.
+
+For local mode, the connection status to LM Studio is shown in the left sidebar (the **LM Studio** item). In **Settings** each role (OCR, translation, fixes) has a model selected. If you downloaded the models from the table, everything is set. Change the server address (`http://localhost:1234`) only if LM Studio runs on another port or machine. The app language (Czech or English, by default following the system) can be changed in **Settings → App**.
 
 ## How to translate
 
-1. On the **Translate** tab, drop files (PDF, DOCX, TXT, MD), pick the languages and a mode. For PDFs you can limit **PDF pages**, e.g. `1-5, 8`.
-2. The job is queued; progress and the time estimate appear under **In progress**.
-3. Finished translations are in **History**. The job detail has tabs:
+1. On the **Translate** tab, drop files (PDF, DOCX, TXT, MD) into the window. They wait in the list until you start.
+2. In **Translation settings** choose **where** to translate (Locally or Online), the **mode**, the languages and, for PDFs, the **pages** (e.g. `1-5, 8`). Optionally keep **tables and figures from the original** or **pick paragraphs** before translating.
+3. Check the cost estimate and click **Translate**. Progress and the time estimate appear under **In progress**.
+4. Finished translations are in **History**. The job detail has tabs:
    - **Comparison**: original and translation paragraph by paragraph, with warnings about possible errors.
    - **Translation**: the translated text only.
-   - **Translated PDF** and **PDFs side by side**: the translated PDF with the original layout, on its own or next to the original.
-   - **Original** and **Information**.
+   - **Translated PDF** and **PDFs side by side**: the translated PDF with the original layout, on its own or next to the original. Drag over an area of a page to translate it separately.
+   - **Original** and **Information** (model used, time, cost, notes).
 
    The **Open Word** and **Open PDF** buttons open the output files.
+
+The **Help** tab explains everything in more detail; the “?” next to each option jumps to the right section.
 
 ### Modes
 
@@ -88,11 +121,11 @@ Jobs and outputs are stored in the app folder:
 
 ## Online models (OpenRouter)
 
-Local models via LM Studio stay the default and the recommended choice. Optionally, you can run the models online through [OpenRouter](https://openrouter.ai) instead: in Settings choose "Online via OpenRouter" and paste your API key. The key is stored encrypted with the operating system's secure storage and is never written to the settings file.
+Choose **Online (API)** on the home screen and paste your [OpenRouter API key](https://openrouter.ai/keys) in **Settings**. The key is stored encrypted with the operating system's secure storage and is never written to the settings file.
 
+- **Cost:** you pay only for what you translate, from your OpenRouter credit. Measured with DeepSeek V4.1 Flash: about $0.001 per page, i.e. roughly $0.02 for a 15–20-page article. The estimate is shown before you start and the real cost after the job; prices can be shown in USD, CZK or both.
+- **Models:** in **Settings** pick a model from the OpenRouter catalog (with prices and a cost estimate per article; refresh the list any time). The default is `deepseek/deepseek-v4.1-flash` (best Czech in our comparison of eight cheap models); `google/gemini-3.1-flash-lite` is a faster alternative at about twice the price. Models ending in `:free` cost nothing but are slow (one request per ~3 s), have daily limits and the provider may use your data.
 - **Privacy:** the text of your documents (and page images when OCR or table repair runs) is sent over the internet to the model provider. Use local mode for sensitive documents.
-- **Models:** pick a model for each role from the OpenRouter catalog (with prices per 1M tokens). The default is `deepseek/deepseek-v4.1-flash` (best Czech in our comparison of eight cheap models); `google/gemini-3.1-flash-lite` is a faster alternative at about twice the price. Models ending in `:free` are slow (one request per ~3 s) and have daily limits.
-- **Cost:** the real price of each job is shown in its details. A rough estimate: a 15-page article costs about $0.02 with DeepSeek V4.1 Flash and about $0.03 with Gemini 3.1 Flash-Lite.
 
 ## Glossary
 
