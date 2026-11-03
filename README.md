@@ -13,8 +13,18 @@ It runs either **for free on your own computer** (models in [LM Studio](https://
 ## Who it is for
 
 - **Companies and legal teams:** understand contracts, terms, tenders and policies written in another language. Ask *“What is the notice period and when does it start?”*, *“Is liability capped?”* or *“Where is the data stored?”* and jump straight to the clause. With local models, **confidential documents never leave the computer**: no cloud, no third-party processing, no subscription.
-- **Students and researchers:** read papers in a foreign language for (almost) nothing, keep citations and footnotes, ask the paper for its main argument and get page references you can put in your own work.
+- **Students and researchers:** read papers and books in a foreign language for (almost) nothing. See [For studying](#for-studying) below.
 - **Anyone who works with foreign documents:** manuals, reports, letters, scans.
+
+### For studying
+
+Writing a seminar paper or a thesis from foreign-language sources? TransLatte lets you work the way you actually study:
+
+- **Translate as much as you need.** The whole document, only some pages (e.g. `12-30` of a book), only the paragraphs you tick, or just one chart or table: drag over it on the page and it is translated on the spot. Translate more later without starting over.
+- **Ask instead of rereading.** *“What is the author's main argument?”*, *“How does the paper define human capital?”*, *“What method did they use and on what data?”*, *“What are the limitations?”* Every answer comes with sources and page numbers, so you can quote and cite correctly in your own work.
+- **Summaries and key terms** with one click, also for long texts.
+- **Learn the terminology.** The paragraph-by-paragraph comparison shows the original next to the translation; the glossary keeps the technical terms of your field consistent across all your sources.
+- **For free and offline.** Locally it costs nothing and works without the internet, ideal for a student budget. Online, a whole article costs about half a crown.
 
 > TransLatte helps you find and understand what a document says. It is not legal advice: always check important answers against the cited text.
 
