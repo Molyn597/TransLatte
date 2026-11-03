@@ -16,7 +16,7 @@ import {
 import { resolveLang, setLang, t, type MessageKey } from '../shared/i18n';
 import { languageName } from '../shared/languages';
 import { findRegion, normalizeCrop } from '../shared/regions';
-import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, Provider, RegionTranslation, Settings, Stage } from '../shared/types';
+import type { ChatModel, GlossaryEntry, Job, JobOptions, Mode, OutputKind, Provider, RegionTranslation, Settings, Stage } from '../shared/types';
 import { isOnline } from '../shared/provider';
 import { askDocument } from './chat';
 import { fileInfo } from './fileinfo';
@@ -31,8 +31,8 @@ import { Store } from './store';
 
 const isMac = process.platform === 'darwin';
 const TITLE_BAR = {
-  light: { color: '#f3ede6', symbolColor: '#2b211b' },
-  dark: { color: '#17130f', symbolColor: '#f1e9df' },
+  light: { color: '#F7F7F6', symbolColor: '#18181B' },
+  dark: { color: '#0B0B0C', symbolColor: '#EDEDEF' },
 };
 const STAGE_LABEL: Record<Stage, MessageKey> = {
   prepare: 'tray.stage.prepare',
@@ -141,7 +141,7 @@ function setMenu() {
 }
 
 function applyTheme(theme: Settings['theme']) {
-  nativeTheme.themeSource = theme === 'mono' ? 'light' : theme;
+  nativeTheme.themeSource = theme;
   if (!isMac && win) win.setTitleBarOverlay({ ...TITLE_BAR[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'], height: 36 });
 }
 
@@ -165,7 +165,7 @@ function createWindow() {
     minWidth: 940,
     minHeight: 640,
     title: 'TransLatte',
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#17130f' : '#f3ede6',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B0B0C' : '#F7F7F6',
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     ...(isMac ? {} : { titleBarOverlay: { ...TITLE_BAR[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'], height: 36 } }),
     autoHideMenuBar: !isMac,
@@ -279,10 +279,16 @@ function registerIpc() {
     return region;
   });
   ipcMain.handle('job-chat', (_e, id: string) => store.chat(id));
-  ipcMain.handle('job-chat-ask', async (_e, id: string, question: string) => {
+  ipcMain.handle('job-chat-ask', async (_e, id: string, question: string, model?: ChatModel) => {
     const job = await store.job(id);
     if (!job) throw new Error(t('study.noJob'));
-    const answer = await queue.exclusive(async () => askDocument(store, job, await store.settings(), question));
+    if (queue.busy) send('chat-progress', { jobId: id, step: t('chat.stepQueue') });
+    const answer = await queue.exclusive(async () =>
+      askDocument(store, job, await store.settings(), question, model, {
+        step: (step, tags) => send('chat-progress', { jobId: id, step, tags }),
+        delta: (d) => send('chat-delta', { jobId: id, ...d }),
+      }),
+    );
     send('job-update', job);
     return answer;
   });

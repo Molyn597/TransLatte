@@ -1,7 +1,7 @@
 import { CHARS_PER_PAGE, estimateCost } from '../shared/cost';
 import { formatUsd } from '../shared/estimate';
 import { locale, t, type MessageKey, type UiLangSetting } from '../shared/i18n';
-import { activeRates, FAST_REMOTE_MODEL, isFreeModel, isOnline, RECOMMENDED_REMOTE_MODEL } from '../shared/provider';
+import { activeRates, FAST_REMOTE_MODEL, isFreeModel, RECOMMENDED_REMOTE_MODEL } from '../shared/provider';
 import { catalogRows, filterCatalog, formatContext, isFree, sharedModel, sortCatalog, visionWarnings } from '../shared/catalog-view';
 import type { Currency, GlossaryEntry, LmStatus, ModelPrice, Models, Settings, Theme } from '../shared/types';
 import { duration, h, icon, ICONS, toast } from './dom';
@@ -120,7 +120,7 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
   }
 
   const theme = h('select');
-  for (const value of ['system', 'light', 'dark', 'mono'] as Theme[]) {
+  for (const value of ['system', 'light', 'dark'] as Theme[]) {
     theme.append(h('option', { value, selected: settings.theme === value }, t(`settings.theme.${value}`)));
   }
   theme.addEventListener('change', () => {
@@ -144,24 +144,21 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
   });
 
   const r = activeRates(settings);
-  const rates = h(
-    'section',
-    { class: 'setting-group' },
-    h('h2', {}, t('settings.rates')),
-    h(
-      'p',
-      { class: 'muted small' },
-      t('settings.ratesText', { ocr: duration(r.ocrPerPage), translate: duration(r.translatePerKChar), fix: duration(r.fixPerSegment) }),
-    ),
-  );
-
+  // Pevné pořadí sekcí: Vzhled, Překlad v počítači, Online (OpenRouter), Pokročilé.
   $('settings').replaceChildren(
-    ...(isOnline(settings) ? [remoteGroup(settings, remote, save, rerender), modelGroup] : [modelGroup, remoteGroup(settings, remote, save, rerender)]),
+    h(
+      'section',
+      { class: 'setting-group' },
+      h('h2', {}, t('settings.section.look')),
+      h('label', { class: 'field' }, h('span', {}, 'Jazyk aplikace / App language'), uiLang),
+      h('label', { class: 'field' }, h('span', {}, t('settings.theme')), theme),
+    ),
+    modelGroup,
+    remoteGroup(settings, remote, save, rerender),
     h(
       'section',
       { class: 'setting-group' },
       h('h2', {}, t('settings.app')),
-      h('label', { class: 'field' }, h('span', {}, 'Jazyk aplikace / App language'), uiLang),
       toggle(t('settings.notify'), t('settings.notifyHint'), settings.notify, (v) => {
         settings.notify = v;
         void save();
@@ -174,9 +171,12 @@ export async function renderSettings(onSaved: (s: Settings) => void) {
         settings.unloadWhenIdle = v;
         void save();
       }),
-      h('label', { class: 'field' }, h('span', {}, t('settings.theme')), theme),
+      h(
+        'div',
+        { class: 'toggle' },
+        h('span', {}, h('div', {}, t('settings.rates')), h('div', { class: 'muted small' }, t('settings.ratesText', { ocr: duration(r.ocrPerPage), translate: duration(r.translatePerKChar), fix: duration(r.fixPerSegment) }))),
+      ),
     ),
-    rates,
   );
 }
 

@@ -58,6 +58,8 @@ export class Store {
       ...DEFAULT_SETTINGS,
       ...saved,
       provider: saved.provider === 'openrouter' ? 'openrouter' : 'local',
+      // Zrušené černobílé téma (a cokoli neznámého) se vrací k systémovému.
+      theme: saved.theme === 'light' || saved.theme === 'dark' ? saved.theme : 'system',
       models: { ...DEFAULT_SETTINGS.models, ...saved.models },
       remoteModels: { ...DEFAULT_SETTINGS.remoteModels, ...saved.remoteModels },
       rates: mergeRates(DEFAULT_SETTINGS.rates, saved.rates),

@@ -243,7 +243,8 @@ export function createPages(holder: HTMLElement, base: () => number) {
 }
 
 export function setupPdfZoom() {
-  scroller = document.querySelector<HTMLElement>('main.main')!;
+  // Detail má vlastní posuvnou čtecí oblast; hlavička a lišty nad ní zůstávají na místě.
+  scroller = document.getElementById('detail-scroll')!;
   const body = document.getElementById('detail-body')!;
   const button = (key: 'zoom.in' | 'zoom.out' | 'zoom.fit', path: string, onclick: () => void) =>
     h('button', { class: 'zoom-btn', type: 'button', title: t(key), 'aria-label': t(key), onclick }, icon(path));

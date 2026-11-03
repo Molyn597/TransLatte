@@ -58,6 +58,11 @@ export const ICONS = {
   plus: '<path d="M12 5v14M5 12h14" />',
   fit: '<path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" />',
   collapse: '<path d="M13 6l6 6-6 6M5 6l6 6-6 6" />',
+  chevron: '<path d="M6 9l6 6 6-6" />',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" />',
+  globe: '<circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" />',
+  up: '<path d="M12 19V5M6 11l6-6 6 6" />',
+  more: '<circle cx="6" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="18" cy="12" r="1.6" fill="currentColor" stroke="none" />',
 };
 
 export const cleanError = (e: unknown) => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
@@ -97,6 +102,9 @@ export function date(ms: number) {
 export function jobDuration(job: Job) {
   return job.startedAt && job.finishedAt ? duration((job.finishedAt - job.startedAt) / 1000) : '';
 }
+
+/** Název pro čtení: bez přípony (ta v job.name není) a s mezerami místo podtržítek. */
+export const jobTitle = (job: Job) => job.name.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim() || job.name;
 
 export function langPair(job: Job) {
   const src = job.sourceLang === 'auto' ? t('lang.autoShort') : languageName(job.sourceLang);

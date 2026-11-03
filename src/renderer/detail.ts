@@ -16,6 +16,7 @@ import {
   icon,
   ICONS,
   jobDuration,
+  jobTitle,
   langPair,
   MODES,
   progressBar,
@@ -61,122 +62,140 @@ let cite: { segment: Segment; scrolled: boolean } | null = null;
 
 export const detailJobId = () => current?.job.id ?? null;
 const pdfTabs = () => document.querySelectorAll<HTMLButtonElement>('#detail-tabs .tab[data-pdf]');
-// Pod touto šířkou těla se stránky řadí pod sebe.
-const SIDE_BY_SIDE_MIN = 760;
+// Pod touto šířkou čtecí oblasti se stránky řadí pod sebe; nad ní zůstávají vedle sebe a zmenší se.
+const SIDE_BY_SIDE_MIN = 560;
 const PAIR_GAP = 14;
 
+const statusChip = (job: Job) => h('span', { class: `status-chip is-${job.status}` }, h('i'), t(STATUS_TEXT[job.status]));
+
+/** Druhá lišta vpravo: stránky a jazyky, u upozornění odkaz na první místo ke kontrole. */
 function meta(job: Job) {
-  const chips = [
-    h('span', { class: job.status === 'error' ? 'chip err' : 'chip' }, t(STATUS_TEXT[job.status])),
-    h('span', { class: 'chip' }, t(MODES[job.mode].title)),
-    h('span', { class: 'chip' }, langPair(job)),
-    h('span', { class: 'chip' }, date(job.createdAt)),
-  ];
-  if (job.pages) chips.push(h('span', { class: 'chip' }, t('detail.pages', { count: job.pages })));
-  if (jobDuration(job)) chips.push(h('span', { class: 'chip' }, jobDuration(job)));
-  if (isOnline(job)) chips.push(h('span', { class: 'chip' }, t('job.online')));
-  // Čím se překládalo (staré úlohy model neznají).
-  if (job.models) chips.push(h('span', { class: 'chip' }, [...new Set(Object.values(job.models))].map((id) => id.split('/').pop()).join(' + ')));
-  if (job.warnings) chips.push(h('span', { class: 'chip warn' }, t('job.warnings', { count: job.warnings })));
-  return chips;
+  const text = [job.pages ? t('cost.pages', { count: job.pages }) : '', langPair(job)].filter(Boolean).join(' · ');
+  const list: HTMLElement[] = [h('span', { class: 'detail-meta-text', title: text }, text)];
+  if (job.warnings) list.push(h('button', { class: 'link', type: 'button', onclick: () => void showWarnings() }, t('detail.toReview', { count: job.warnings })));
+  return list;
 }
 
-function relayoutButton(job: Job) {
-  const button = h('button', { class: 'btn' }, icon(ICONS.retry), t('detail.relayout'));
-  button.onclick = async () => {
-    button.disabled = true;
-    try {
-      await window.api.relayoutJob(job.id);
-      toast(t('detail.relayoutDone'));
-      await openDetail(job.id, tab);
-    } finally {
-      button.disabled = false;
+async function showWarnings() {
+  clearCite();
+  tab = 'compare';
+  await renderBody();
+  $('detail-body').querySelector('.compare-cell.has-warning')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+type MenuItem = { label: string; icon?: string; danger?: boolean; run: () => unknown } | string;
+
+/** Tlačítko „⋯“ s nabídkou; řetězec v seznamu je nadpis skupiny. */
+function actionMenu(items: MenuItem[]) {
+  const menu = h('div', { class: 'menu', role: 'menu', hidden: true });
+  for (const item of items) {
+    if (typeof item === 'string') {
+      menu.append(h('div', { class: 'menu-label' }, item));
+      continue;
     }
-  };
-  return button;
-}
-
-function retryMenu(job: Job) {
-  const wrap = h('div', { class: 'menu-wrap' });
-  const menu = h('div', { class: 'menu', hidden: true });
-  for (const mode of Object.keys(MODES) as Mode[]) {
     menu.append(
       h(
         'button',
         {
-          onclick: async () => {
+          type: 'button',
+          role: 'menuitem',
+          class: item.danger ? 'danger' : false,
+          onclick: () => {
             menu.hidden = true;
-            await window.api.retryJob(job.id, mode);
-            toast(t('detail.retryQueued', { name: job.name, mode: t(MODES[mode].title) }));
+            void item.run();
           },
         },
-        t('mode.suffix', { mode: t(MODES[mode].title) }),
+        item.icon ? icon(item.icon) : null,
+        item.label,
       ),
     );
   }
-  const button = h('button', { class: 'btn', onclick: (e: Event) => {
-    e.stopPropagation();
-    menu.hidden = !menu.hidden;
-  } }, icon(ICONS.retry), t('detail.retry'));
-  wrap.append(button, menu);
-  return wrap;
+  const button = h(
+    'button',
+    {
+      class: 'btn icon-only',
+      type: 'button',
+      title: t('detail.more'),
+      'aria-label': t('detail.more'),
+      'aria-haspopup': 'menu',
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        const open = menu.hidden;
+        for (const m of document.querySelectorAll<HTMLElement>('.menu')) m.hidden = true;
+        menu.hidden = !open;
+      },
+    },
+    icon(ICONS.more),
+  );
+  return h('div', { class: 'menu-wrap' }, button, menu);
 }
 
+async function relayout(job: Job) {
+  try {
+    await window.api.relayoutJob(job.id);
+    toast(t('detail.relayoutDone'));
+    if (current?.job.id === job.id) await openDetail(job.id, tab);
+  } catch (e) {
+    toast(cleanError(e), true);
+  }
+}
+
+function retryItems(job: Job): MenuItem[] {
+  return [
+    t('detail.retry'),
+    ...(Object.keys(MODES) as Mode[]).map((mode) => ({
+      label: t('mode.suffix', { mode: t(MODES[mode].title) }),
+      icon: ICONS.retry,
+      run: async () => {
+        await window.api.retryJob(job.id, mode);
+        toast(t('detail.retryQueued', { name: job.name, mode: t(MODES[mode].title) }));
+      },
+    })),
+  ];
+}
+
+const deleteItem = (job: Job): MenuItem => ({
+  label: t('detail.delete'),
+  icon: ICONS.trash,
+  danger: true,
+  run: async () => {
+    if (!confirm(t('detail.confirmDelete', { name: job.name }))) return;
+    await window.api.deleteJob(job.id);
+  },
+});
+
+/** Hlavní akce jako tlačítka (Word, Otevřít PDF), ostatní v nabídce „⋯“. */
 function actions(job: Job) {
-  const list: HTMLElement[] = [];
   if (job.status === 'running' || job.status === 'queued') {
-    list.push(h('button', { class: 'btn danger', onclick: () => window.api.cancelJob(job.id) }, icon(ICONS.stop), t('job.cancel')));
-    return list;
+    return [h('button', { class: 'btn danger', type: 'button', onclick: () => window.api.cancelJob(job.id) }, icon(ICONS.stop), t('job.cancel'))];
   }
-  if (job.status === 'picking') {
-    list.push(retryMenu(job), deleteButton(job));
-    return list;
-  }
+  const list: HTMLElement[] = [];
+  const items: MenuItem[] = [];
   if (job.status === 'done') {
-    if (job.outputPdf) {
-      list.push(h('button', { class: 'btn primary', onclick: () => window.api.openOutput(job.id, 'pdf') }, icon(ICONS.file), t('detail.openPdf')));
-    }
     list.push(
-      h('button', { class: job.outputPdf ? 'btn' : 'btn primary', onclick: () => window.api.openOutput(job.id, 'docx') }, icon(ICONS.file), t('detail.openWord')),
-      h('button', { class: 'btn', onclick: () => window.api.saveOutputAs(job.id) }, icon(ICONS.download), t('detail.saveAs')),
-      h('button', { class: 'btn', onclick: () => window.api.revealOutput(job.id) }, icon(ICONS.folder), t('detail.reveal')),
+      h('button', { class: job.outputPdf ? 'btn' : 'btn primary', type: 'button', title: t('detail.openWord'), onclick: () => window.api.openOutput(job.id, 'docx') }, job.outputPdf ? t('detail.word') : t('detail.openWord')),
     );
+    if (job.outputPdf) list.push(h('button', { class: 'btn primary', type: 'button', onclick: () => window.api.openOutput(job.id, 'pdf') }, t('detail.openPdf')));
+    items.push(
+      { label: t('detail.saveAs'), icon: ICONS.download, run: () => window.api.saveOutputAs(job.id) },
+      { label: t('detail.reveal'), icon: ICONS.folder, run: () => window.api.revealOutput(job.id) },
+    );
+    if (job.ext.toLowerCase() === '.pdf') items.push({ label: t('detail.relayout'), icon: ICONS.retry, run: () => relayout(job) });
+    if (current && pickable(current.segments).some((s) => s.skipped)) {
+      items.push({
+        label: t('pick.more'),
+        icon: ICONS.list,
+        run: () => {
+          startPicking();
+          tab = 'compare';
+          void renderBody();
+        },
+      });
+    }
   }
-  if (job.status === 'done' && job.ext.toLowerCase() === '.pdf') list.push(relayoutButton(job));
-  if (job.status === 'done' && current && pickable(current.segments).some((s) => s.skipped)) list.push(moreButton());
-  list.push(retryMenu(job), deleteButton(job));
+  items.push(...retryItems(job), deleteItem(job));
+  list.push(actionMenu(items));
   return list;
-}
-
-function deleteButton(job: Job) {
-  return h(
-    'button',
-    {
-      class: 'btn danger',
-      title: t('detail.delete'),
-      onclick: async () => {
-        if (!confirm(t('detail.confirmDelete', { name: job.name }))) return;
-        await window.api.deleteJob(job.id);
-      },
-    },
-    icon(ICONS.trash),
-  );
-}
-
-function moreButton() {
-  return h(
-    'button',
-    {
-      class: 'btn',
-      onclick: () => {
-        startPicking();
-        tab = 'compare';
-        void renderBody();
-      },
-    },
-    icon(ICONS.list),
-    t('pick.more'),
-  );
 }
 
 /** Výchozí výběr: u nové úlohy vše, u hotové jen to, co už je přeložené (to je zamčené). */
@@ -545,7 +564,8 @@ function showCite(segment: Segment) {
   void renderBody();
 }
 
-const regionHint = () => h('p', { class: 'muted region-hint' }, t('region.hint'));
+const regionHint = () => h('p', { class: 'region-hint' }, t('region.hint'));
+const langCode = (lang: string) => (lang === 'auto' ? t('lang.autoShort') : lang.toUpperCase());
 
 async function pdfView(data: Uint8Array | null, token: number, selectable = false) {
   const holder = h('div', { class: 'pdf-pages' }, h('p', { class: 'muted' }, t('detail.loadingPdf')));
@@ -569,13 +589,21 @@ async function sideBySideView(detail: JobDetail, token: number) {
   const [left, right] = await Promise.all([getDocument({ data: source, ...PDFJS_OPTIONS }).promise, getDocument({ data: output, ...PDFJS_OPTIONS }).promise]);
   if (token !== renderToken) return holder;
   holder.append(regionHint());
-  // Základní šířka stránky; podle šířky těla zároveň přepíná řazení pod sebe.
+  // Základní šířka stránky; podle šířky čtecí oblasti zároveň přepíná řazení pod sebe.
   const pages = createPages(holder, () => {
     const available = $('detail-body').clientWidth || 800;
     const stacked = available < SIDE_BY_SIDE_MIN;
     holder.classList.toggle('stacked', stacked);
     return stacked ? Math.min(900, available) : Math.floor((available - PAIR_GAP) / 2);
   });
+  const label = (text: string) => {
+    const el = pages.spacer();
+    el.className = 'pdf-label';
+    el.textContent = text;
+    return el;
+  };
+  const { sourceLang, targetLang } = detail.job;
+  holder.append(h('div', { class: 'pdf-pair pdf-labels' }, label(t('detail.originalCode', { lang: langCode(sourceLang) })), label(t('detail.translationCode', { lang: langCode(targetLang) }))));
   const count = Math.max(left.numPages, right.numPages);
   const cells = await Promise.all(
     Array.from({ length: count }, (_, i) => Promise.all([i < left.numPages ? pages.canvas(left, i + 1) : null, i < right.numPages ? pages.canvas(right, i + 1) : null])),
@@ -602,6 +630,11 @@ function infoView(detail: JobDetail) {
   row(t('detail.info.languages'), langPair(job));
   row(t('detail.info.created'), date(job.createdAt));
   if (jobDuration(job)) row(t('detail.info.duration'), jobDuration(job));
+  // Čím se překládalo (staré úlohy model neznají).
+  if (job.models) {
+    const names = [...new Set(Object.values(job.models))].map((id) => id.split('/').pop()).join(' + ');
+    row(t('detail.info.models'), isOnline(job) ? `${t('job.online')} · ${names}` : names);
+  }
   if (job.cost) {
     const actual = formatUsd(job.cost);
     row(t('detail.info.cost'), job.costEstimate ? t('detail.info.costWithEstimate', { amount: actual, estimate: formatUsd(job.costEstimate) }) : actual);
@@ -629,7 +662,7 @@ function infoView(detail: JobDetail) {
       timings.map(([stage, s]) => `${stageName(stage)}: ${duration(s)}`).join(' · '),
     );
   }
-  const box = h('div', { class: 'view' }, dl);
+  const box = h('div', { class: 'info-view' }, dl);
   if (job.error) box.prepend(h('div', { class: 'error-box' }, job.error));
   const warned = segments.filter((s) => s.warning);
   if (warned.length) {
@@ -693,7 +726,9 @@ async function renderBody() {
 function renderHeader() {
   if (!current) return;
   const { job } = current;
-  $('detail-name').textContent = job.name;
+  $('detail-name').textContent = jobTitle(job);
+  $('detail-name').title = `${job.name}${job.ext}`;
+  $('detail-status').replaceChildren(statusChip(job));
   $('detail-meta').replaceChildren(...meta(job));
   $('detail-actions').replaceChildren(...actions(job));
   for (const b of pdfTabs()) b.hidden = !job.outputPdf;

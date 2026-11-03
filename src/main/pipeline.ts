@@ -13,7 +13,7 @@ import { documentOrder, rewriteDates, type DateOrder } from './dates';
 import { buildDocx, loadFigures } from './docx';
 import { buildLayoutPdf, type PageGeometry, type PageImage } from './layout-pdf';
 import { readKey } from './keystore';
-import { chat, complete, ensureModel, ensureServer, isVisionModel, type ChatContent } from './lmstudio';
+import { chat, chatStream, complete, ensureModel, ensureServer, isVisionModel, type ChatContent } from './lmstudio';
 import { closePdf, openPdf, pageText, renderPage } from './pdf';
 import { catalogPrices, isRemoteVision, resolveEndpoint, type Endpoint } from './provider';
 import { baseCost, estimateCost } from '../shared/cost';
@@ -85,6 +85,15 @@ const addCost = (job: Job, usd: number) => (job.cost = (job.cost ?? 0) + usd);
 /** Dotaz na model role; cena z online odpovědi se přičte k úloze. */
 export const ask = (ctx: Llm, role: Role, messages: { role: 'system' | 'user' | 'assistant'; content: ChatContent }[], maxTokens: number) =>
   chat(ctx.endpoint!, modelName(ctx.settings, role), messages, { maxTokens, signal: ctx.signal, onCost: (usd) => addCost(ctx.job, usd) });
+
+/** Jako `ask`, odpověď ale po částech do `onDelta`. */
+export const askStream = (
+  ctx: Llm,
+  role: Role,
+  messages: { role: 'system' | 'user' | 'assistant'; content: ChatContent }[],
+  maxTokens: number,
+  onDelta: (d: { content?: string; reasoning?: string }) => void,
+) => chatStream(ctx.endpoint!, modelName(ctx.settings, role), messages, { maxTokens, signal: ctx.signal, onCost: (usd) => addCost(ctx.job, usd), onDelta });
 
 // Online poskytovatel nic nenačítá ani neuvolňuje, modely jsou vždy k dispozici.
 export const loadModel = async (ctx: Llm, role: Role) => {

@@ -14,6 +14,7 @@ import {
   icon,
   ICONS,
   jobDuration,
+  jobTitle,
   langPair,
   MODES,
   progressBar,
@@ -65,7 +66,8 @@ function show(next: View) {
   if (next === 'settings') void renderSettings(onSettingsSaved);
   if (next === 'history') renderHistory();
   if (next === 'help') renderHelp(showWelcome);
-  $('detail-body').closest('.main')?.scrollTo(0, 0);
+  document.querySelector('.main')?.scrollTo(0, 0);
+  $('detail-scroll').scrollTo(0, 0);
 }
 
 /** Přepne na nápovědu a případně rovnou na kapitolu. */
@@ -110,11 +112,9 @@ async function refreshStatus() {
   // Odpověď z doby před přepnutím poskytovatele.
   if ((lm.provider ?? 'local') !== settings.provider) return;
   lastStatus = lm;
-  const dot = $('status-dot');
-  dot.className = `status-dot ${lm.online ? 'online' : 'offline'}`;
+  $('status-dot').className = `status-dot ${lm.online ? 'online' : 'offline'}`;
   const remote = lm.provider === 'openrouter';
   $('lm-title').textContent = remote ? t('lm.titleOnline') : 'LM Studio';
-  dot.title = $('lm-title').textContent;
   $('lm-state').textContent = remote
     ? lm.online
       ? t('lm.remoteOk')
@@ -127,9 +127,13 @@ async function refreshStatus() {
         ? t('lm.stopped')
         : t('lm.notFound');
   catalog = lm.models;
-  renderCost();
-  renderEngine();
   const models = activeModels(settings);
+  // Řádek stavu dole v panelu: kde se překládá a jakým modelem; podrobnosti v rozbalovacím okně.
+  $('status-title').textContent = t(remote ? 'side.online' : 'side.local');
+  $('status-model').textContent = modelName(models.translate);
+  $('status-row').title = `${$('lm-title').textContent}: ${$('lm-state').textContent}`;
+  renderEngine();
+  renderCost();
   $('lm-models').replaceChildren(
     ...(Object.keys(ROLE_NAMES) as (keyof Models)[]).map((role) => {
       const missing = lm.missing.includes(role);
@@ -145,8 +149,12 @@ async function refreshStatus() {
 }
 
 const modelName = (id: string) => catalog.find((m) => m.key === id)?.name ?? id.split('/').pop()!;
+const prices = () => Object.fromEntries(catalog.map((m) => [m.key, m.price]));
 
-/** Výrazně ukáže, čím se bude překládat, a u online i stav API klíče. */
+// Online se kvalita nevolí: Nejlepší jen přidá jeden dotaz na kontext dokumentu (cena i čas zanedbatelné).
+const jobMode = (): Mode => (isOnline(settings) ? 'quality' : settings.mode);
+
+/** Kde a čím se bude překládat; hlášky (chybí klíč, LM Studio) jako text u řádku modelu. */
 function renderEngine() {
   const online = isOnline(settings);
   $('provider-switch').replaceChildren(
@@ -155,7 +163,7 @@ function renderEngine() {
         'button',
         {
           class: settings.provider === p ? 'segment active' : 'segment',
-          title: t(`home.provider.${p}Desc`),
+          type: 'button',
           role: 'radio',
           'aria-checked': String(settings.provider === p),
           onclick: async () => {
@@ -171,24 +179,32 @@ function renderEngine() {
       ),
     ),
   );
-  const names = [...new Set(Object.values(activeModels(settings)))].map(modelName);
-  const status = !lastStatus
-    ? h('span', { class: 'chip' }, t('lm.checking'))
-    : online
-      ? lastStatus.hasKey
-        ? h('span', { class: 'chip ok' }, icon(ICONS.check), t('home.keySaved'))
-        : h('span', { class: 'chip warn' }, icon(ICONS.alert), t('home.keyMissing'))
-      : h('span', { class: lastStatus.online || lastStatus.cli ? 'chip ok' : 'chip warn' }, lastStatus.online ? t('lm.running') : lastStatus.cli ? t('home.lmReady') : t('lm.notFound'));
-  $('engine').replaceChildren(
-    h(
-      'div',
-      { class: 'engine-line' },
-      h('span', { class: 'engine-models', title: names.join(' + ') }, names.join(' + ')),
-      status,
-      h('button', { class: 'link', onclick: () => show('settings') }, t('home.changeModel')),
-    ),
-    h('div', { class: 'muted small' }, t(`home.provider.${settings.provider}Desc`)),
+  $('provider-note').textContent = t(`home.provider.${settings.provider}Desc`);
+
+  const models = activeModels(settings);
+  const all = [...new Set(Object.values(models))].map(modelName).join(' + ');
+  let note = '';
+  let warn = '';
+  if (!lastStatus) note = t('lm.checking');
+  else if (online) {
+    const typical = estimateFiles({ files: [{ kind: 'pdf', pages: TYPICAL_PAGES }], mode: 'quality', models, prices: prices(), factors: settings.remoteCostFactors });
+    if (typical.free) note = t('settings.remote.free');
+    else if (typical.usd !== undefined) note = t('settings.remote.estimate', { amount: formatUsd(typical.usd), pages: TYPICAL_PAGES });
+    if (!lastStatus.hasKey) warn = t('home.keyMissingHint');
+  } else {
+    note = `LM Studio · ${lastStatus.online ? t('lm.running') : lastStatus.cli ? t('home.lmReady') : t('lm.notFound')}`;
+    if (!lastStatus.online && !lastStatus.cli) warn = t('lm.notFound');
+  }
+  const engine = $('engine');
+  engine.title = `${t('home.changeModel')} · ${all}`;
+  engine.onclick = () => show('settings');
+  engine.replaceChildren(
+    h('span', { class: 'model-pick-name' }, modelName(models.translate)),
+    h('span', { class: 'model-pick-note' }, note),
+    icon(ICONS.chevron),
   );
+  $('engine-warn').textContent = warn;
+  $('engine-warn').hidden = !warn;
   renderStart();
 }
 
@@ -197,7 +213,7 @@ function renderStart() {
   const button = $<HTMLButtonElement>('start');
   button.disabled = !pending.length || noKey;
   button.textContent = pending.length > 1 ? t('home.startMany', { count: pending.length }) : t('home.start');
-  $('start-hint').textContent = noKey ? t('home.keyMissingHint') : pending.length ? '' : t('home.startHint');
+  $('start-hint').textContent = noKey ? '' : pending.length ? '' : t('home.startHint');
 }
 
 function renderAll() {
@@ -208,23 +224,26 @@ function renderAll() {
 
 // ---------- Domů ----------
 
-function modeTime(mode: Mode) {
+function secondsPerPage(mode: Mode) {
   const r = activeRates(settings);
   const k = CHARS_PER_PAGE / 1000;
-  const seconds =
-    k * r.translatePerKChar +
-    (mode === 'fast' ? 0 : r.ocrPerPage + FIXES_PER_PAGE * r.fixPerSegment) +
-    (mode === 'quality' ? CONTEXT_SECONDS : 0);
-  return t('home.timePerPage', { time: duration(seconds) });
+  // Rychlý režim a online čtou digitální stránky z textové vrstvy, OCR jen u skenů (jako pipeline).
+  const ocr = mode === 'fast' || isOnline(settings) ? 0 : r.ocrPerPage;
+  return k * r.translatePerKChar + ocr + (mode === 'fast' ? 0 : FIXES_PER_PAGE * r.fixPerSegment) + (mode === 'quality' ? CONTEXT_SECONDS : 0);
 }
 
+const QUALITY: Record<Mode, MessageKey> = { fast: 'quality.fast', balanced: 'quality.balanced', quality: 'quality.quality' };
+
 function renderModes() {
+  $('quality-row').hidden = isOnline(settings);
   $('modes').replaceChildren(
     ...(Object.keys(MODES) as Mode[]).map((mode) =>
       h(
         'button',
         {
           class: settings.mode === mode ? 'segment active' : 'segment',
+          type: 'button',
+          title: t(MODES[mode].desc),
           role: 'radio',
           'aria-checked': String(settings.mode === mode),
           onclick: async () => {
@@ -234,46 +253,77 @@ function renderModes() {
             await window.api.saveSettings(settings);
           },
         },
-        icon(ICONS[mode]),
-        t(MODES[mode].title),
+        t(QUALITY[mode]),
       ),
     ),
   );
-  $('mode-desc').textContent = `${t(MODES[settings.mode].desc)} · ${modeTime(settings.mode)}`;
+  $('mode-desc').textContent = t('home.timePerPage', { time: duration(secondsPerPage(settings.mode)) });
 }
 
-/** Odhad ceny: vždy pro typický článek v aktuálním režimu, po přidání souborů i pro ně (s režimem a rozsahem, se kterými se zařadily). */
+/** Odhad v patičce karty: bez souborů pro typický článek, jinak pro vybrané soubory (s rozsahem stránek); online i cena. */
 function renderCost() {
-  // Podtitulek slibuje lokální zpracování; online by to nebyla pravda.
-  $('home-subtitle').textContent = t(isOnline(settings) ? 'home.subtitleOnline' : 'home.subtitle');
   const el = $('cost-estimate');
-  const models = settings.remoteModels;
-  const prices = Object.fromEntries(catalog.map((m) => [m.key, m.price]));
-  if (!isOnline(settings) || !Object.values(models).every((m) => prices[m])) {
-    el.hidden = true;
+  const mode = jobMode();
+  const files = pending.map((p) => p.info).filter((i): i is FileInfo => Boolean(i));
+  const pageRange = $<HTMLInputElement>('page-range').value;
+  const est = estimateFiles({
+    files: files.length ? files : [{ kind: 'pdf', pages: TYPICAL_PAGES }],
+    pageRange: files.length && isValidPageRange(pageRange) ? pageRange : '',
+    mode,
+    models: activeModels(settings),
+    prices: prices(),
+    factors: settings.remoteCostFactors,
+  });
+  el.title = isOnline(settings) ? t('home.costActual') : '';
+  if (!est.pages) {
+    el.textContent = t('home.costDocxOnly');
     return;
   }
-  const names = [...new Set(Object.values(models))].map((id) => catalog.find((m) => m.key === id)?.name ?? id).join(', ');
-  const factors = settings.remoteCostFactors;
-  const typical = estimateFiles({ files: [{ kind: 'pdf', pages: TYPICAL_PAGES }], mode: settings.mode, models, prices, factors });
-  const lines = [
-    h(
-      'div',
-      {},
-      typical.free ? t('home.costTypicalFree', { model: names }) : t('home.costTypical', { amount: formatUsd(typical.usd ?? 0), pages: TYPICAL_PAGES, model: names }),
-    ),
-  ];
-  const files = pending.map((p) => p.info).filter((i): i is FileInfo => Boolean(i));
-  if (files.length) {
-    const pageRange = $<HTMLInputElement>('page-range').value;
-    const est = estimateFiles({ files, pageRange: isValidPageRange(pageRange) ? pageRange : '', mode: settings.mode, models, prices, factors });
-    const pages = t('cost.pages', { count: est.pages });
-    const known = est.free || est.usd !== undefined;
-    const line = !known ? t('home.costDocxOnly') : est.free || est.usd === 0 ? t('home.costFree', { pages }) : t('home.cost', { amount: formatUsd(est.usd!), pages });
-    lines.push(h('div', {}, line, est.unknownDocx && known ? ` · ${t('home.costDocx')}` : '', h('span', { class: 'muted' }, ` ${t('home.costActual')}`)));
-  }
-  el.replaceChildren(...lines);
-  el.hidden = false;
+  const vars = { time: duration(est.pages * secondsPerPage(mode)), pages: t('cost.pages', { count: est.pages }) };
+  const text = !isOnline(settings)
+    ? t('home.estLocal', vars)
+    : est.free || est.usd === 0
+      ? t('home.estFree', vars)
+      : est.usd !== undefined
+        ? t('home.estOnline', { ...vars, amount: formatUsd(est.usd) })
+        : t('home.estLocal', vars);
+  el.textContent = est.unknownDocx ? `${text} · ${t('home.costDocx')}` : text;
+}
+
+function setupPagesToggle() {
+  const row = $('pages-row');
+  const toggle = $('pages-toggle');
+  const input = $<HTMLInputElement>('page-range');
+  toggle.addEventListener('click', () => {
+    row.hidden = !row.hidden;
+    toggle.setAttribute('aria-expanded', String(!row.hidden));
+    if (row.hidden) {
+      // Skrytý rozsah nesmí potichu platit dál.
+      input.value = '';
+      input.classList.remove('invalid');
+      renderCost();
+    } else input.focus();
+  });
+}
+
+/** Podrobnosti o stavu LM Studia / OpenRouteru v okénku nad řádkem stavu. */
+function setupStatus() {
+  const row = $('status-row');
+  const pop = $('lm-pop');
+  let open = false;
+  const setOpen = (value: boolean) => {
+    open = value;
+    pop.hidden = !open;
+    row.setAttribute('aria-expanded', String(open));
+  };
+  row.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(!open);
+    if (open) void refreshStatus();
+  });
+  pop.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => setOpen(false));
+  document.addEventListener('keydown', (e) => e.key === 'Escape' && setOpen(false));
 }
 
 function fillLanguages() {
@@ -361,7 +411,7 @@ async function startPending() {
   const paths = pending.map((p) => p.path);
   try {
     await window.api.addJobs(paths, {
-      mode: settings.mode,
+      mode: jobMode(),
       sourceLang: settings.sourceLang,
       targetLang: settings.targetLang,
       pageRange,
@@ -442,6 +492,17 @@ function jobRow(job: Job) {
   );
 }
 
+/** Řádek „Nedávné dokumenty“: tečka stavu, název a stránky s datem. */
+function recentRow(job: Job) {
+  return h(
+    'button',
+    { class: 'recent-row', type: 'button', onclick: () => openJob(job.id), title: `${job.name}${job.ext}` },
+    h('span', { class: `dot dot-${job.status}`, title: t(STATUS_TEXT[job.status]) }),
+    h('span', { class: 'recent-name' }, jobTitle(job)),
+    h('span', { class: 'recent-meta' }, [job.pages ? t('cost.pages', { count: job.pages }) : '', date(job.createdAt)].filter(Boolean).join(' · ')),
+  );
+}
+
 const sorted = () => [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
 const isActive = (j: Job) => j.status === 'running' || j.status === 'queued';
 
@@ -453,9 +514,9 @@ function renderHome() {
   $('active-jobs').replaceChildren(...active.map(jobCard));
   const recent = sorted()
     .filter((j) => !isActive(j))
-    .slice(0, 4);
+    .slice(0, 3);
   $('recent-title').hidden = !recent.length;
-  $('recent-jobs').replaceChildren(...recent.map(jobRow));
+  $('recent-jobs').replaceChildren(...recent.map(recentRow));
   const badge = $('active-badge');
   badge.hidden = !active.length;
   badge.textContent = String(active.length);
@@ -527,6 +588,8 @@ async function init() {
     b.addEventListener('click', () => show(b.dataset.nav as View));
   }
   setupNavToggle();
+  setupStatus();
+  setupPagesToggle();
   setupDetail(() => show(previousView));
   setupGlossary();
   setupDrop();

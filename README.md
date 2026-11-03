@@ -1,15 +1,31 @@
+<p align="center"><img src="build/icon.png" width="112" alt="TransLatte logo"></p>
+
 # TransLatte
 
-**Translate academic papers, scans and documents for (almost) nothing — and keep the original layout.**
+**Translate documents, keep their layout, and ask them questions. Privately on your own computer, or online for a few cents.**
 
-TransLatte translates PDFs (including scans), Word, TXT and Markdown files. You get a Word document, Markdown text and, for PDFs, a translated PDF that looks like the original: same layout, images and tables. It runs either **for free on your own computer** (models in [LM Studio](https://lmstudio.ai)) or **online for a few cents** through [OpenRouter](https://openrouter.ai).
+TransLatte translates PDFs (including scans), Word, TXT and Markdown files into a Word document, Markdown and a translated PDF that looks like the original. Then you can **chat with the document**: ask what a contract says about termination, what an author thinks about management or what a law requires, and get an answer **with sources** that highlight the exact passage in the original and in the translation.
+
+It runs either **for free on your own computer** (models in [LM Studio](https://lmstudio.ai), nothing leaves your machine) or **online for a few cents** through [OpenRouter](https://openrouter.ai).
+
+![Chat with a translated contract: the answer cites the clause, which is highlighted in the original and in the translation](docs/screenshots/chat.png)
+
+## Who it is for
+
+- **Companies and legal teams:** understand contracts, terms, tenders and policies written in another language. Ask *“What is the notice period and when does it start?”*, *“Is liability capped?”* or *“Where is the data stored?”* and jump straight to the clause. With local models, **confidential documents never leave the computer**: no cloud, no third-party processing, no subscription.
+- **Students and researchers:** read papers in a foreign language for (almost) nothing, keep citations and footnotes, ask the paper for its main argument and get page references you can put in your own work.
+- **Anyone who works with foreign documents:** manuals, reports, letters, scans.
+
+> TransLatte helps you find and understand what a document says. It is not legal advice: always check important answers against the cited text.
 
 ## Why TransLatte
 
-- **Built for students on a budget.** Paid translators such as [DeepL Pro](https://www.deepl.com/pro) are monthly subscriptions, and document translation is limited on the cheaper plans. TransLatte has no subscription:
-  - **Locally it costs nothing.** The models run on your computer and your text never leaves it.
-  - **Online you pay only for what you translate.** With the recommended model (DeepSeek V4.1 Flash) a 15–20-page journal article costs around **$0.02 (≈ 0.5 CZK)**. A $10 OpenRouter credit is enough for hundreds of articles.
-- **Made for academic texts.** It keeps paragraphs, headings, footnotes, citations, links and tables, fixes typical machine-translation errors and respects your glossary of technical terms.
+- **Private by design.** Local mode runs entirely on your computer. Translation, the document chat and all files stay on your disk.
+- **Answers you can verify.** Every claim in a chat answer links to the paragraph it comes from; one click highlights it in both PDFs side by side.
+- **Built for students and small teams on a budget.** Paid translators such as [DeepL Pro](https://www.deepl.com/pro) are monthly subscriptions, and document translation is limited on the cheaper plans. TransLatte has no subscription:
+  - **Locally it costs nothing.** The models run on your computer.
+  - **Online you pay only for what you use.** With the recommended model (DeepSeek V4.1 Flash) a 15–20-page article costs around **$0.02 (≈ 0.5 CZK)** to translate, and a question in the chat costs a fraction of a cent. A $10 OpenRouter credit is enough for hundreds of articles.
+- **Made for academic and professional texts.** It keeps paragraphs, headings, footnotes, citations, links and tables, fixes typical machine-translation errors and respects your glossary of technical terms.
 - **You see what you'll pay.** The cost is estimated before you start (in USD, CZK or both) and the real cost is shown when the job finishes.
 
 > Prices are approximate and depend on the model and the document; check current prices of paid services on their websites.
@@ -17,16 +33,38 @@ TransLatte translates PDFs (including scans), Word, TXT and Markdown files. You 
 ## Features
 
 - **PDF in, PDF out:** a translated PDF with the original layout, plus Word (.docx) and Markdown. Works with digital PDFs, scans (OCR), password-free encrypted PDFs and multi-column journal and magazine layouts.
-- **Locally or online:** switch on the home screen between local models (free, private) and online models via OpenRouter (fast, pay per use). The active model and whether your API key is saved are always visible.
-- **Three modes:** Fast, Balanced (OCR of every page, check and fix) and Quality (also reads the topic and author for correct terminology and grammatical gender).
+- **Chat with the document:** a side panel next to the document, like NotebookLM. Answers come only from the document, with numbered sources that highlight the passage in the original and the translated PDF. You see what the model is doing (searching keywords, which pages it found, writing the answer) and the answer is written as it arrives. Quick actions **Summarize** and **Key terms**. Choose the model right in the chat: on your computer or online.
+- **Locally or online:** switch on the home screen between local models (free, private) and online models via OpenRouter (fast, pay per use).
 - **Tables and figures from the original:** a table or chart with a caption (Table 1, Figure 2…) can be kept exactly as in the original as an image; only the caption is translated.
 - **Pick what to translate:** choose a page range or tick individual paragraphs; translate more later.
-- **Check and fix:** flags untranslated words, likely typos, missing glossary terms and truncated sentences, and fixes them in Balanced and Quality modes.
+- **Check and fix:** flags untranslated words, likely typos, missing glossary terms and truncated sentences, and fixes them.
 - **Glossary:** binding translations of technical terms used in every job.
-- **Review side by side:** paragraph-by-paragraph comparison, the translated PDF next to the original, and translation of any selected area of a page (e.g. a chart).
+- **Read comfortably:** translation, paragraph-by-paragraph comparison, translated PDF, both PDFs side by side and the original. Zoom with a pinch, Ctrl/Cmd + scroll or the zoom bar, and drag over any area of a page to translate it separately (e.g. a chart).
 - **Queue:** add several files at once; they are translated one after another in the background.
-- **Easy to start:** a short welcome guide on first launch, built-in Help with “?” hints next to the options, and an update notice when a new version is released.
-- **Czech and English interface**, light, dark and monochrome themes; macOS and Windows.
+- **Clean interface:** dark and light theme (or follow the system), collapsible sidebar and chat, Czech and English, macOS and Windows.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/translate.png" alt="Translate screen: drop a document, choose where to translate, the model and the languages"></td>
+    <td><img src="docs/screenshots/compare.png" alt="Paragraph-by-paragraph comparison of the original and the translation, light theme"></td>
+  </tr>
+  <tr>
+    <td align="center">Translate: where, which model, which languages</td>
+    <td align="center">Comparison of original and translation (light theme)</td>
+  </tr>
+</table>
+
+## How the document chat works
+
+The chat uses **retrieval-augmented generation (RAG)**: the model answers from the document, not from its memory.
+
+1. **Passages.** After translation the document is already split into paragraphs. Each one knows its page and its exact position on the page, in the original and in the translated PDF.
+2. **Short document → whole text.** If the document fits into the model's context (about 10 pages locally, about 130 pages online), the model simply reads all of it. That is the most accurate option.
+3. **Long document → search first.** The model turns your question into keywords in both languages (so you can ask in Czech about an English text). A full-text search (BM25 over the original and the translation, tolerant to Czech word endings) picks the most relevant paragraphs together with the heading of the section they belong to.
+4. **Answer with sources.** The model gets only those passages and is told to answer strictly from them and cite each claim. Citations pointing to passages it was not given are removed automatically. If the answer is not in the document, it says so.
+5. **Verify.** Click a source number and TransLatte opens the PDFs side by side and highlights the passage in both.
+
+The conversation is stored with the job, so you can come back to it later.
 
 ## What you need
 
@@ -50,7 +88,7 @@ The models run on the GPU. Only one model is in memory at a time; the app swaps 
 
 - **Mac:** the GPU shares memory with the system and macOS gives it roughly two thirds to three quarters of it, so 16 GB is the minimum. Intel Macs with AMD graphics have not been tested.
 - **Windows:** LM Studio splits the model between GPU and RAM on its own. If a model fails to load or the system becomes unusable, open the model settings in LM Studio (**My Models** → gear icon next to the model) and lower **GPU Offload**. Fewer layers on the GPU means less VRAM but slower translation.
-- **Weaker and stronger machines:** TranslateGemma also comes in 4B (for 6–8 GB VRAM, lower quality) and 27B (for 24 GB VRAM, better quality). After downloading, select it in **Settings → Translation**. These sizes have not been tested with TransLatte yet.
+- **Weaker and stronger machines:** TranslateGemma also comes in 4B (for 6–8 GB VRAM, lower quality) and 27B (for 24 GB VRAM, better quality). After downloading, select it in **Settings → Translation on this computer**. These sizes have not been tested with TransLatte yet.
 
 These requirements are estimates. They have been verified on a 16 GB Apple Silicon MacBook Air.
 
@@ -81,51 +119,50 @@ Download the installer from [Releases](https://github.com/Molyn597/TransLatte/re
 
 A short welcome guide asks whether you want to translate locally or online; you can change it any time on the home screen. For online mode paste your OpenRouter API key in **Settings** and you're done.
 
-For local mode, the connection status to LM Studio is shown in the left sidebar (the **LM Studio** item). In **Settings** each role (OCR, translation, fixes) has a model selected. If you downloaded the models from the table, everything is set. Change the server address (`http://localhost:1234`) only if LM Studio runs on another port or machine. The app language (Czech or English, by default following the system) can be changed in **Settings → App**.
+The connection status (LM Studio or OpenRouter and the active model) is shown at the bottom of the left sidebar; click it for details. In **Settings** each role (OCR, translation, fixes) has a model selected. If you downloaded the models from the table, everything is set. Change the server address (`http://localhost:1234`) only if LM Studio runs on another port or machine. The app language (Czech or English, by default following the system) can be changed in **Settings → Appearance**.
 
 ## How to translate
 
-1. On the **Translate** tab, drop files (PDF, DOCX, TXT, MD) into the window. They wait in the list until you start.
-2. In **Translation settings** choose **where** to translate (Locally or Online), the **mode**, the languages and, for PDFs, the **pages** (e.g. `1-5, 8`). Optionally keep **tables and figures from the original** or **pick paragraphs** before translating.
-3. Check the cost estimate and click **Translate**. Progress and the time estimate appear under **In progress**.
-4. Finished translations are in **History**. The job detail has tabs:
-   - **Comparison**: original and translation paragraph by paragraph, with warnings about possible errors.
+1. On the **Translate** tab, drop files (PDF, DOCX, TXT, MD) into the window or click **Choose files**.
+2. Choose **where** to translate (on your computer or online), check the **model** and the **languages**. Locally you can also pick the **quality** (Fast, Balanced, Best); online always uses the best mode, which costs only one extra short request. Optionally keep **tables and figures from the original**, **pick paragraphs** before translating or translate **only some pages** (e.g. `1-5, 8`).
+3. Check the estimate and click **Translate**.
+4. Finished translations are in **History**. The document detail has a fixed bar with **Word**, **Open PDF** and a **⋯** menu (save as, show in folder, re-typeset the PDF, translate again, delete) and these tabs:
    - **Translation**: the translated text only.
-   - **Translated PDF** and **PDFs side by side**: the translated PDF with the original layout, on its own or next to the original. Drag over an area of a page to translate it separately.
-   - **Original** and **Information** (model used, time, cost, notes).
-
-   The **Open Word** and **Open PDF** buttons open the output files.
+   - **Comparison**: original and translation paragraph by paragraph. The **N to review** link jumps to places worth checking.
+   - **Translated PDF** and **PDFs side by side**: the translated PDF with the original layout, on its own or next to the original.
+   - **Original** and **Information** (models used, time, cost, notes).
+5. Open the **chat** with the button in the top right corner and ask anything about the document.
 
 The **Help** tab explains everything in more detail; the “?” next to each option jumps to the right section.
 
-### Modes
+### Quality (local mode)
 
-| Mode | What it does | When to use |
+| Quality | What it does | When to use |
 | --- | --- | --- |
 | **Fast** | Takes text straight from the PDF, OCR only for scanned pages. Only flags errors. | Ordinary digital PDFs; the default. |
 | **Balanced** | OCR of all pages (better paragraph order and tables), checks and fixes errors. | Complex layouts, tables. |
-| **Quality** | Also reads the document context (topic, author and their grammatical gender) for more accurate fixes. | Texts that matter. |
+| **Best** | Also reads the document context (topic, author and their grammatical gender) for more accurate fixes. | Texts that matter. |
 
-## How it works
+## How translation works
 
 1. **Extraction:** text and page layout (paragraphs, headings, tables, links) are read from the PDF. Headers, footers and page numbers are skipped. Scanned pages are read by the OCR model.
-2. **Translation:** TranslateGemma translates paragraph by paragraph, several requests at once. Dates like `03-10-2014` are first rewritten into an unambiguous form so day and month don't get swapped.
+2. **Translation:** TranslateGemma (or the online model) translates paragraph by paragraph, several requests at once. Dates like `03-10-2014` are first rewritten into an unambiguous form so day and month don't get swapped.
 3. **Check:** typical errors are found without a model: untranslated words, missing glossary terms, Czech prepositions (se/ze, ke/ve), spelling via a Hunspell dictionary, and truncated or repeated sentences. The Czech dictionary is downloaded on first use.
-4. **Fix:** in Balanced and Quality modes Gemma rewrites only the paragraphs with errors and leaves the rest alone.
+4. **Fix:** Gemma rewrites only the paragraphs with errors and leaves the rest alone.
 5. **Output:** a Word file, Markdown and, for PDFs, a translated PDF. In it the original text is covered with the background colour, the translation is set in the same place and links stay clickable.
 
-Jobs and outputs are stored in the app folder:
+Jobs, outputs and chat history are stored in the app folder:
 
 - macOS: `~/Library/Application Support/TransLatte/jobs`
 - Windows: `%APPDATA%\TransLatte\jobs`
 
 ## Online models (OpenRouter)
 
-Choose **Online (API)** on the home screen and paste your [OpenRouter API key](https://openrouter.ai/keys) in **Settings**. The key is stored encrypted with the operating system's secure storage and is never written to the settings file.
+Choose **Online** on the home screen and paste your [OpenRouter API key](https://openrouter.ai/keys) in **Settings**. The key is stored encrypted with the operating system's secure storage and is never written to the settings file.
 
 - **Cost:** you pay only for what you translate, from your OpenRouter credit. Measured with DeepSeek V4.1 Flash: about $0.001 per page, i.e. roughly $0.02 for a 15–20-page article. The estimate is shown before you start and the real cost after the job; prices can be shown in USD, CZK or both.
 - **Models:** in **Settings** pick a model from the OpenRouter catalog (with prices and a cost estimate per article; refresh the list any time). The default is `deepseek/deepseek-v4.1-flash` (best Czech in our comparison of eight cheap models); `google/gemini-3.1-flash-lite` is a faster alternative at about twice the price. Models ending in `:free` cost nothing but are slow (one request per ~3 s), have daily limits and the provider may use your data.
-- **Privacy:** the text of your documents (and page images when OCR or table repair runs) is sent over the internet to the model provider. Use local mode for sensitive documents.
+- **Privacy:** the text of your documents (and page images when OCR or table repair runs) is sent over the internet to the model provider. The same applies to the document chat when you choose an online model in it. Use local mode for sensitive documents.
 
 ## Glossary
 

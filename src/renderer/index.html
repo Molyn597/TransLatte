@@ -19,13 +19,12 @@
     </button>
     <div class="app">
       <aside class="sidebar">
-        <div class="brand-pill">
+        <div class="brand">
           <img class="brand-mark" src="icon.png" alt="" />
           <span class="brand-name">TransLatte</span>
-          <span class="status-dot" id="status-dot" title="LM Studio"><span class="dot"></span></span>
         </div>
 
-        <nav class="panel nav-panel">
+        <nav class="nav-panel">
           <button class="nav-item active" data-nav="home">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h9M8.5 3v2M6 5c1 4 3.5 6.5 7 8M11 5c-1 4-3.5 7-7 9" /><path d="M13 21l4-9 4 9M14.5 18h5" /></svg>
             <span data-i18n="nav.translate">Přeložit</span>
@@ -39,6 +38,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z" /><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5M8 7h8M8 11h5" /></svg>
             <span data-i18n="nav.glossary">Glosář</span>
           </button>
+          <div class="nav-gap"></div>
           <button class="nav-item" data-nav="help">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17h.01" /></svg>
             <span data-i18n="nav.help">Nápověda</span>
@@ -49,113 +49,123 @@
           </button>
         </nav>
 
-        <section class="panel lm-card">
-          <div class="lm-head">
-            <span id="lm-title">LM Studio</span>
-            <button class="circle-btn small" id="lm-refresh" title="Zkontrolovat znovu" data-i18n-title="lm.recheck">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></svg>
-            </button>
-          </div>
-          <div class="lm-state" id="lm-state" data-i18n="lm.checking">Zjišťuji…</div>
-          <ul class="lm-models" id="lm-models"></ul>
-        </section>
+        <div class="status-wrap">
+          <button class="status-row" id="status-row" type="button" aria-expanded="false" aria-controls="lm-pop">
+            <span class="status-dot" id="status-dot"></span>
+            <span class="status-text">
+              <span class="status-title" id="status-title" data-i18n="lm.checking">Zjišťuji…</span>
+              <span class="status-model" id="status-model"></span>
+            </span>
+          </button>
+          <section class="lm-pop" id="lm-pop" role="dialog" data-i18n-aria-label="side.details" hidden>
+            <div class="lm-head">
+              <span id="lm-title">LM Studio</span>
+              <button class="icon-btn small" id="lm-refresh" type="button" title="Zkontrolovat znovu" data-i18n-title="lm.recheck">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></svg>
+              </button>
+            </div>
+            <div class="lm-state" id="lm-state" data-i18n="lm.checking">Zjišťuji…</div>
+            <ul class="lm-models" id="lm-models"></ul>
+          </section>
+        </div>
       </aside>
 
-      <main class="panel main">
+      <main class="main">
         <div class="update-bar" id="update-bar" hidden>
           <span id="update-text"></span>
           <button class="btn primary" id="update-download" data-i18n="update.download">Stáhnout</button>
-          <button class="circle-btn small" id="update-dismiss" title="Zavřít" data-i18n-title="update.dismiss">
+          <button class="icon-btn small" id="update-dismiss" title="Zavřít" data-i18n-title="update.dismiss">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
         <section class="view" data-view="home">
           <header class="view-head">
             <h1 data-i18n="home.title">Přeložit dokument</h1>
-            <p class="muted" id="home-subtitle" data-i18n="home.subtitle">PDF (i skeny), Word, TXT nebo Markdown. Vše se zpracuje lokálně ve tvém LM Studiu.</p>
           </header>
 
-          <section class="home-card">
-            <div class="step-label"><span class="step-num">1</span><span data-i18n="home.step1">Soubory</span></div>
-            <button class="dropzone" id="dropzone">
-              <span class="drop-icon">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5" /><path d="M20 15v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4" /></svg>
-              </span>
-              <span class="drop-text">
-                <span class="drop-title" data-i18n="home.dropTitle">Přetáhni sem soubory</span>
-                <span class="drop-more" data-i18n="home.dropMore">Přidat další soubory</span>
-                <span class="drop-sub" data-i18n="home.dropSub">nebo klikni a vyber je · PDF, DOCX, TXT, MD</span>
-              </span>
-            </button>
-            <div class="pending" id="pending" hidden>
-              <div class="pending-list" id="pending-list"></div>
-              <button class="link pending-clear" id="pending-clear" data-i18n="home.pendingClear">Odebrat vše</button>
-            </div>
-          </section>
-
-          <section class="home-card">
-            <div class="step-label"><span class="step-num">2</span><span data-i18n="home.step2">Nastavení překladu</span></div>
-            <div class="setting-rows">
-              <div class="setting-row">
-                <span class="row-label"><span data-i18n="home.where">Kde</span><span class="help-slot" data-help="provider" data-hint="hint.provider"></span></span>
-                <div class="row-body">
-                  <div class="segmented" id="provider-switch" role="radiogroup" aria-label="Kde překládat" data-i18n-aria-label="home.provider"></div>
-                  <div class="engine" id="engine"></div>
-                </div>
-              </div>
-              <div class="setting-row">
-                <span class="row-label"><span data-i18n="home.mode">Režim</span><span class="help-slot" data-help="modes" data-hint="hint.modes"></span></span>
-                <div class="row-body">
-                  <div class="segmented" id="modes" role="radiogroup" aria-label="Režim" data-i18n-aria-label="home.mode"></div>
-                  <div class="muted small" id="mode-desc"></div>
-                </div>
-              </div>
-              <div class="setting-row">
-                <span class="row-label" data-i18n="home.language">Jazyk</span>
-                <div class="row-body langs">
-                  <select id="source-lang" aria-label="Z jazyka" data-i18n-aria-label="home.from"></select>
-                  <svg class="lang-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                  <select id="target-lang" aria-label="Do jazyka" data-i18n-aria-label="home.to"></select>
-                </div>
-              </div>
-              <div class="setting-row">
-                <span class="row-label"><span data-i18n="home.pages">Stránky PDF</span><span class="help-slot" data-help="options" data-hint="hint.pages"></span></span>
-                <div class="row-body pages-field">
-                  <input id="page-range" type="text" placeholder="všechny" title="Např. 1-8 nebo 1-3, 5. Prázdné = celý dokument." data-i18n-placeholder="home.pagesAll" data-i18n-title="home.pagesHint" />
-                  <span class="muted small" data-i18n="home.pagesExample">např. 1-8 nebo 1-3, 5</span>
-                </div>
-              </div>
-              <div class="setting-row">
-                <span class="row-label"><span data-i18n="home.extras">Navíc</span><span class="help-slot" data-help="options" data-hint="hint.options"></span></span>
-                <div class="row-body checks">
-                  <label class="check-field" data-i18n-title="home.keepFiguresHint" title="Tabulky a grafy s popiskem (Table 1, Figure 2…) se nepřekládají, vloží se jako obrázek z originálu; přeloží se jen popisek.">
-                    <input id="keep-figures" type="checkbox" />
-                    <span data-i18n="home.keepFigures">Tabulky a grafy z originálu</span>
-                  </label>
-                  <label class="check-field" data-i18n-title="home.pickParagraphsHint" title="Po přečtení dokumentu si vybereš, které odstavce se přeloží.">
-                    <input id="pick-paragraphs" type="checkbox" />
-                    <span data-i18n="home.pickParagraphs">Vybrat odstavce před překladem</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <div class="start-row">
-            <p class="cost-estimate" id="cost-estimate" hidden></p>
-            <span class="muted small" id="start-hint"></span>
-            <button class="btn primary start-btn" id="start" disabled data-i18n="home.start">Přeložit</button>
+          <button class="dropzone" id="dropzone" type="button">
+            <span class="drop-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5" /><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" /></svg>
+            </span>
+            <span class="drop-title" data-i18n="home.dropTitle">Přetáhni sem dokument</span>
+            <span class="drop-more" data-i18n="home.dropMore">Přidat další soubory</span>
+            <span class="drop-sub" data-i18n="home.dropSub">PDF (i skeny), Word, TXT nebo Markdown</span>
+            <span class="btn drop-pick" data-i18n="home.pick">Vybrat soubory</span>
+          </button>
+          <div class="pending" id="pending" hidden>
+            <div class="pending-list" id="pending-list"></div>
+            <button class="link pending-clear" id="pending-clear" type="button" data-i18n="home.pendingClear">Odebrat vše</button>
           </div>
+
+          <section class="form-card">
+            <div class="form-row">
+              <span class="row-label"><span data-i18n="home.provider">Kde překládat</span><span class="help-slot" data-help="provider" data-hint="hint.provider"></span></span>
+              <div class="row-body">
+                <div class="segmented" id="provider-switch" role="radiogroup" aria-label="Kde překládat" data-i18n-aria-label="home.provider"></div>
+                <span class="row-note" id="provider-note"></span>
+              </div>
+            </div>
+            <div class="form-row">
+              <span class="row-label" data-i18n="home.model">Model</span>
+              <div class="row-body stacked">
+                <button class="model-pick" id="engine" type="button"></button>
+                <span class="row-note warn" id="engine-warn" hidden></span>
+              </div>
+            </div>
+            <div class="form-row">
+              <span class="row-label" data-i18n="home.language">Jazyk</span>
+              <div class="row-body">
+                <select id="source-lang" aria-label="Z jazyka" data-i18n-aria-label="home.from"></select>
+                <svg class="lang-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                <select id="target-lang" aria-label="Do jazyka" data-i18n-aria-label="home.to"></select>
+              </div>
+            </div>
+            <div class="form-row" id="quality-row">
+              <span class="row-label"><span data-i18n="home.mode">Kvalita</span><span class="help-slot" data-help="modes" data-hint="hint.modes"></span></span>
+              <div class="row-body">
+                <div class="segmented" id="modes" role="radiogroup" aria-label="Kvalita" data-i18n-aria-label="home.mode"></div>
+                <span class="row-note" id="mode-desc"></span>
+              </div>
+            </div>
+            <div class="form-row">
+              <span class="row-label"><span data-i18n="home.extras">Navíc</span><span class="help-slot" data-help="options" data-hint="hint.options"></span></span>
+              <div class="row-body checks">
+                <label class="check-field" data-i18n-title="home.keepFiguresHint" title="Tabulky a grafy s popiskem (Table 1, Figure 2…) se nepřekládají, vloží se jako obrázek z originálu; přeloží se jen popisek.">
+                  <input id="keep-figures" type="checkbox" />
+                  <span data-i18n="home.keepFigures">Tabulky a grafy z originálu</span>
+                </label>
+                <label class="check-field" data-i18n-title="home.pickParagraphsHint" title="Po přečtení dokumentu si vybereš, které odstavce se přeloží.">
+                  <input id="pick-paragraphs" type="checkbox" />
+                  <span data-i18n="home.pickParagraphs">Vybrat odstavce před překladem</span>
+                </label>
+              </div>
+            </div>
+            <div class="form-row" id="pages-row" hidden>
+              <span class="row-label"><span data-i18n="home.pages">Stránky PDF</span><span class="help-slot" data-help="options" data-hint="hint.pages"></span></span>
+              <div class="row-body">
+                <input id="page-range" type="text" placeholder="všechny" title="Např. 1-8 nebo 1-3, 5. Prázdné = celý dokument." data-i18n-placeholder="home.pagesAll" data-i18n-title="home.pagesHint" />
+                <span class="row-note" data-i18n="home.pagesExample">např. 1-8 nebo 1-3, 5</span>
+              </div>
+            </div>
+            <div class="form-foot">
+              <div class="estimate">
+                <span id="cost-estimate"></span>
+                <span class="row-note" id="start-hint"></span>
+              </div>
+              <button class="link" id="pages-toggle" type="button" aria-controls="pages-row" aria-expanded="false" data-i18n="home.somePages">Jen některé stránky</button>
+              <button class="btn primary start-btn" id="start" type="button" disabled data-i18n="home.start">Přeložit</button>
+            </div>
+          </section>
 
           <div class="section-title" id="active-title" data-i18n="home.active" hidden>Probíhá</div>
           <div class="job-cards" id="active-jobs"></div>
 
-          <div class="section-title" id="recent-title" data-i18n="home.recent" hidden>Naposledy přeloženo</div>
-          <div class="job-list" id="recent-jobs"></div>
+          <div class="section-title" id="recent-title" data-i18n="home.recent" hidden>Nedávné dokumenty</div>
+          <div class="recent-list" id="recent-jobs"></div>
         </section>
 
         <section class="view" data-view="history" hidden>
-          <header class="view-head row">
+          <header class="view-head">
             <h1 data-i18n="nav.history">Historie</h1>
             <input class="search" id="history-search" type="search" placeholder="Hledat podle názvu…" data-i18n-placeholder="history.search" />
           </header>
@@ -168,41 +178,40 @@
 
         <section class="view detail" data-view="detail" hidden>
           <header class="detail-head">
-            <button class="circle-btn" id="detail-back" title="Zpět" data-i18n-title="detail.back">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+            <button class="icon-btn" id="detail-back" type="button" title="Zpět" data-i18n-title="detail.back" data-i18n-aria-label="detail.back">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
             </button>
-            <div class="detail-title">
-              <h1 id="detail-name"></h1>
-              <div class="chips" id="detail-meta"></div>
-            </div>
+            <span class="crumb" data-i18n="nav.history">Historie</span>
+            <span class="crumb" aria-hidden="true">/</span>
+            <h1 id="detail-name"></h1>
+            <span id="detail-status"></span>
             <div class="detail-actions" id="detail-actions"></div>
           </header>
           <div class="detail-progress" id="detail-progress" hidden></div>
           <div class="tabs-row">
             <div class="tabs" role="tablist" id="detail-tabs">
+              <button class="tab" data-tab="translation" data-i18n="detail.tab.translation">Překlad</button>
               <button class="tab active" data-tab="compare" data-i18n="detail.tab.compare">Srovnání</button>
               <button class="tab" data-tab="translated-pdf" data-pdf hidden data-i18n="detail.tab.translatedPdf">Překlad PDF</button>
               <button class="tab" data-tab="side-by-side" data-pdf hidden data-i18n="detail.tab.sideBySide">PDF vedle sebe</button>
-              <button class="tab" data-tab="translation" data-i18n="detail.tab.translation">Překlad</button>
               <button class="tab" data-tab="original" data-i18n="detail.tab.original">Originál</button>
               <button class="tab" data-tab="info" data-i18n="detail.tab.info">Informace</button>
             </div>
-            <button class="btn" id="chat-toggle" type="button">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" /></svg>
-              <span data-i18n="chat.tab">Chat</span>
-            </button>
+            <div class="detail-meta" id="detail-meta"></div>
           </div>
-          <div class="tab-body" id="detail-body"></div>
+          <div class="detail-scroll" id="detail-scroll">
+            <div class="tab-body" id="detail-body"></div>
+          </div>
         </section>
 
         <section class="view" data-view="glossary" hidden>
           <header class="view-head">
             <h1 data-i18n="nav.glossary">Glosář</h1>
-            <p class="muted" data-i18n="glossary.intro">
-              Závazné překlady odborných termínů. Kvalitní režim je předá redaktorovi; v ostatních režimech se opraví odstavce,
-              kde termín v překladu chybí.
-            </p>
           </header>
+          <p class="muted view-intro" data-i18n="glossary.intro">
+            Závazné překlady odborných termínů. Kvalitní režim je předá redaktorovi; v ostatních režimech se opraví odstavce,
+            kde termín v překladu chybí.
+          </p>
           <div class="glossary" id="glossary"></div>
           <div class="row gap">
             <button class="btn" id="glossary-add" data-i18n="glossary.add">Přidat termín</button>
@@ -213,8 +222,8 @@
         <section class="view help" data-view="help" hidden>
           <header class="view-head">
             <h1 data-i18n="help.title">Nápověda</h1>
-            <p class="muted" data-i18n="help.subtitle">Stručný průvodce aplikací.</p>
           </header>
+          <p class="muted view-intro" data-i18n="help.subtitle">Stručný průvodce aplikací.</p>
           <nav class="help-toc" id="help-toc" aria-label="Obsah" data-i18n-aria-label="help.toc"></nav>
           <div class="help-body" id="help-body"></div>
         </section>
@@ -226,11 +235,11 @@
           <div class="settings" id="settings"></div>
         </section>
       </main>
-      <aside class="panel chat-panel" id="chat-panel" hidden>
+      <aside class="chat-panel" id="chat-panel" hidden>
         <div class="chat-resize" id="chat-resize"></div>
         <div class="chat-inner" id="chat-inner"></div>
       </aside>
-      <button class="panel chat-rail" id="chat-rail" type="button" hidden data-i18n-title="chat.show">
+      <button class="chat-rail" id="chat-rail" type="button" hidden data-i18n-title="chat.show">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" /></svg>
         <span data-i18n="chat.tab">Chat</span>
       </button>

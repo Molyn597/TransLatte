@@ -1,4 +1,4 @@
-import type { Models, Provider, Rates, Settings } from './types';
+import type { ChatModel, Models, Provider, Rates, Settings } from './types';
 
 /** Doporučený model OpenRouter pro všechny role; jediné místo, kde je jeho id (vítěz srovnání češtiny 10/2026). */
 export const RECOMMENDED_REMOTE_MODEL = 'deepseek/deepseek-v4.1-flash';
@@ -19,3 +19,11 @@ export const activeModels = (s: ProviderSettings): Models => (isOnline(s) ? s.re
 export const parallelFor = (s: ProviderSettings) =>
   isOnline(s) && Object.values(s.remoteModels).some(isFreeModel) ? 1 : PARALLEL[s.provider ?? 'local'];
 export const activeRates = (s: ProviderSettings): Rates => (isOnline(s) ? s.remoteRates : s.rates);
+
+/** Nastavení pro chat: zvolený model nahradí polish u daného poskytovatele, ostatní zůstává. */
+export function chatSettings(settings: Settings, model?: ChatModel): Settings {
+  if (!model) return settings;
+  return model.provider === 'openrouter'
+    ? { ...settings, provider: 'openrouter', remoteModels: { ...settings.remoteModels, polish: model.model } }
+    : { ...settings, provider: 'local', models: { ...settings.models, polish: model.model } };
+}

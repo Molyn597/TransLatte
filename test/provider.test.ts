@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { activeModels, activeRates, isFreeModel, parallelFor, PARALLEL, RECOMMENDED_REMOTE_MODEL } from '../src/shared/provider';
+import { activeModels, activeRates, chatSettings, isFreeModel, parallelFor, PARALLEL, RECOMMENDED_REMOTE_MODEL } from '../src/shared/provider';
 import { DEFAULT_SETTINGS, Store } from '../src/main/store';
 import { FREE_SPACING_MS, parseCatalog, reasoningFor, resetThrottle, resolveEndpoint, throttleFree } from '../src/main/provider';
 
@@ -115,5 +115,18 @@ describe('throttle bezplatných modelů', () => {
     await all;
     expect(starts).toEqual([0, FREE_SPACING_MS, FREE_SPACING_MS * 2]);
     vi.useRealTimers();
+  });
+});
+
+describe('chatSettings', () => {
+  it('bez modelu vrátí nastavení beze změny, s modelem nahradí polish daného poskytovatele', () => {
+    expect(chatSettings(DEFAULT_SETTINGS)).toBe(DEFAULT_SETTINGS);
+    const online = chatSettings(DEFAULT_SETTINGS, { provider: 'openrouter', model: 'x/y' });
+    expect(online.provider).toBe('openrouter');
+    expect(online.remoteModels).toEqual({ ...DEFAULT_SETTINGS.remoteModels, polish: 'x/y' });
+    expect(online.models).toEqual(DEFAULT_SETTINGS.models);
+    const local = chatSettings({ ...DEFAULT_SETTINGS, provider: 'openrouter' }, { provider: 'local', model: 'gemma' });
+    expect(local.provider).toBe('local');
+    expect(local.models.polish).toBe('gemma');
   });
 });

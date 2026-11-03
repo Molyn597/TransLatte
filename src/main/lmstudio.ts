@@ -125,7 +125,7 @@ function budgetExhausted(body: string) {
   }
 }
 
-async function post<T>(endpoint: Endpoint, path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+async function request(endpoint: Endpoint, path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   const free = endpoint.provider === 'openrouter' && isFreeModel((body as { model?: string }).model ?? '');
   for (let attempt = 0; ; attempt++) {
     if (free) await throttleFree(signal);
@@ -135,7 +135,7 @@ async function post<T>(endpoint: Endpoint, path: string, body: unknown, signal?:
       body: JSON.stringify(body),
       signal,
     });
-    if (res.ok) return (await res.json()) as T;
+    if (res.ok) return res;
     const text = await res.text();
     if (endpoint.provider === 'openrouter') {
       if (res.status === 401) throw new Error(t('openrouter.invalidKey'));
@@ -151,6 +151,9 @@ async function post<T>(endpoint: Endpoint, path: string, body: unknown, signal?:
     throw new Error(t('lmstudio.httpError', { status: res.status, body: text.slice(0, 300) }));
   }
 }
+
+const post = async <T>(endpoint: Endpoint, path: string, body: unknown, signal?: AbortSignal) =>
+  (await (await request(endpoint, path, body, signal)).json()) as T;
 
 /** Jen lokální server; TranslateGemma na OpenRouter není, tam se používá chat. */
 export async function complete(
@@ -198,4 +201,83 @@ export async function chat(
   if (data.error) throw new Error(t('lmstudio.httpError', { status: 200, body: data.error.message ?? '' }));
   if (data.usage?.cost) opts.onCost?.(data.usage.cost);
   return data.choices[0]?.message.content?.trim() ?? '';
+}
+
+/** Rozdělí buffer SSE na hotové `data:` řádky; nedokončený konec vrátí v `rest`. */
+export function sseData(buffer: string) {
+  const lines = buffer.split(/\r?\n/);
+  const rest = lines.pop() ?? '';
+  const data = lines.filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).filter(Boolean);
+  return { data, rest };
+}
+
+export interface ChatDelta {
+  content?: string;
+  reasoning?: string;
+  cost?: number;
+  done?: boolean;
+  error?: string;
+}
+
+/** Jeden `data:` záznam streamu; neparsovatelné řádky (např. komentáře) se přeskočí. */
+export function parseDelta(data: string): ChatDelta {
+  if (data === '[DONE]') return { done: true };
+  try {
+    const json = JSON.parse(data) as {
+      choices?: { delta?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null } }[];
+      usage?: { cost?: number };
+      error?: { message?: string };
+    };
+    if (json.error) return { error: json.error.message ?? '' };
+    const delta = json.choices?.[0]?.delta;
+    return {
+      content: delta?.content || undefined,
+      reasoning: delta?.reasoning || delta?.reasoning_content || undefined,
+      cost: json.usage?.cost || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** Jako `chat`, ale odpověď přichází po částech do `onDelta`; vrací celý text. */
+export async function chatStream(
+  endpoint: Endpoint,
+  model: string,
+  messages: { role: 'system' | 'user' | 'assistant'; content: ChatContent }[],
+  opts: { maxTokens: number; temperature?: number; signal?: AbortSignal; onCost?: (usd: number) => void; onDelta: (d: { content?: string; reasoning?: string }) => void },
+) {
+  const res = await request(
+    endpoint,
+    '/v1/chat/completions',
+    {
+      model,
+      messages,
+      temperature: opts.temperature ?? 0,
+      max_tokens: opts.maxTokens,
+      stream: true,
+      ...(await reasoningParams(endpoint, model)),
+    },
+    opts.signal,
+  );
+  if (!res.body) throw new Error(t('lmstudio.httpError', { status: res.status, body: '' }));
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  const handle = (data: string[]) => {
+    for (const d of data) {
+      const delta = parseDelta(d);
+      if (delta.error !== undefined) throw new Error(t('lmstudio.httpError', { status: 200, body: delta.error }));
+      if (delta.cost) opts.onCost?.(delta.cost);
+      if (delta.content) text += delta.content;
+      if (delta.content || delta.reasoning) opts.onDelta({ content: delta.content, reasoning: delta.reasoning });
+    }
+  };
+  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+    const parsed = sseData(buffer + decoder.decode(chunk, { stream: true }));
+    buffer = parsed.rest;
+    handle(parsed.data);
+  }
+  handle(sseData(buffer + '\n').data);
+  return text.trim();
 }

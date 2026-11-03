@@ -5,8 +5,7 @@ export type Mode = 'fast' | 'balanced' | 'quality';
 export type JobStatus = 'queued' | 'running' | 'picking' | 'done' | 'error' | 'cancelled';
 export type Stage = 'prepare' | 'extract' | 'ocr' | 'tables' | 'context' | 'translate' | 'check' | 'fix' | 'write' | 'layout';
 export type SegmentKind = 'heading' | 'paragraph' | 'list' | 'table';
-/** mono = černobílý vysoký kontrast (vždy světlý podklad). */
-export type Theme = 'system' | 'light' | 'dark' | 'mono';
+export type Theme = 'system' | 'light' | 'dark';
 /** V jaké měně ukazovat ceny online modelů. */
 export type Currency = 'both' | 'czk' | 'usd';
 
@@ -75,7 +74,35 @@ export interface ChatMessage {
   sources?: number[];
   /** Odpověď z celého dokumentu (vešel se do kontextu), jinak z vyhledaných úseků. */
   whole?: boolean;
+  /** Počet úseků, které model dostal (jen při hledání). */
+  found?: number;
+  /** Kroky, kterými odpověď vznikla, a doba v ms. */
+  steps?: string[];
+  ms?: number;
+  /** Zobrazovaný název modelu, který odpověděl. */
+  model?: string;
   at: number;
+}
+
+/** Průběh odpovědi chatu (main → renderer). */
+export interface ChatProgress {
+  jobId: string;
+  step: string;
+  tags?: string[];
+}
+
+export interface ChatDelta {
+  jobId: string;
+  content?: string;
+  reasoning?: string;
+}
+
+/** Model zvolený pro chat s dokumentem; bez něj role polish aktivního poskytovatele. */
+export interface ChatModel {
+  provider: Provider;
+  model: string;
+  /** Zobrazovaný název (jinak id). */
+  name?: string;
 }
 
 export interface FigureSnapshot {
@@ -301,7 +328,7 @@ export interface Api {
   translateRegion(id: string, page: number, crop: RegionTranslation['crop']): Promise<RegionTranslation>;
   jobChat(id: string): Promise<ChatMessage[]>;
   /** Odpověď na dotaz k dokumentu; otázka i odpověď se uloží do historie. */
-  askDocument(id: string, question: string): Promise<ChatMessage>;
+  askDocument(id: string, question: string, model?: ChatModel): Promise<ChatMessage>;
   clearChat(id: string): Promise<void>;
   deleteJob(id: string): Promise<void>;
   openOutput(id: string, kind?: OutputKind): Promise<void>;
@@ -309,6 +336,8 @@ export interface Api {
   saveOutputAs(id: string): Promise<void>;
   onJobUpdate(handler: (job: Job) => void): void;
   onJobRemoved(handler: (id: string) => void): void;
+  onChatProgress(handler: (p: ChatProgress) => void): void;
+  onChatDelta(handler: (d: ChatDelta) => void): void;
   /** Klik na notifikaci otevře detail úlohy. */
   onOpenJob(handler: (id: string) => void): void;
 }
