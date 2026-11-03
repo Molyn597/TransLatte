@@ -22,7 +22,7 @@ Writing a seminar paper or a thesis from foreign-language sources? TransLatte le
 
 - **Translate as much as you need.** The whole document, only some pages (e.g. `12-30` of a book), only the paragraphs you tick, or just one chart or table: drag over it on the page and it is translated on the spot. Translate more later without starting over.
 - **Ask instead of rereading.** *“What is the author's main argument?”*, *“How does the paper define human capital?”*, *“What method did they use and on what data?”*, *“What are the limitations?”* Every answer comes with sources and page numbers, so you can quote and cite correctly in your own work.
-- **Summaries and key terms** with one click, also for long texts.
+- **Summaries and key terms** with one click.
 - **Learn the terminology.** The paragraph-by-paragraph comparison shows the original next to the translation; the glossary keeps the technical terms of your field consistent across all your sources.
 - **For free and offline.** Locally it costs nothing and works without the internet, ideal for a student budget. Online, a whole article costs about half a crown.
 
