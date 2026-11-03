@@ -57,7 +57,7 @@ function show(next: View) {
   if (view !== 'detail') previousView = view;
   view = next;
   for (const el of document.querySelectorAll<HTMLElement>('.view')) el.hidden = el.dataset.view !== next;
-  for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item')) {
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item[data-nav]')) {
     b.classList.toggle('active', b.dataset.nav === next || (next === 'detail' && b.dataset.nav === 'history'));
   }
   if (next !== 'detail') closeDetail();
@@ -480,6 +480,36 @@ function onSettingsSaved(next: Settings) {
   void refreshStatus();
 }
 
+// ---------- Sbalení levého panelu ----------
+
+const NAV_KEY = 'navCollapsed';
+
+function setNavCollapsed(collapsed: boolean) {
+  document.body.classList.toggle('nav-collapsed', collapsed);
+  const toggle = $('nav-toggle');
+  const label = t(collapsed ? 'nav.expand' : 'nav.collapse');
+  toggle.title = label;
+  toggle.setAttribute('aria-label', label);
+  toggle.classList.toggle('active', !collapsed);
+  // Ve sbaleném panelu jsou jen ikony; popisek ukáže tooltip.
+  for (const b of document.querySelectorAll<HTMLElement>('.nav-item[data-nav]')) b.title = collapsed ? (b.querySelector('span')?.textContent ?? '') : '';
+}
+
+function setupNavToggle() {
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem(NAV_KEY) === '1';
+  } catch {}
+  setNavCollapsed(collapsed);
+  $('nav-toggle').addEventListener('click', () => {
+    collapsed = !document.body.classList.contains('nav-collapsed');
+    setNavCollapsed(collapsed);
+    try {
+      localStorage.setItem(NAV_KEY, collapsed ? '1' : '0');
+    } catch {}
+  });
+}
+
 // ---------- Start ----------
 
 async function init() {
@@ -493,9 +523,10 @@ async function init() {
   applyTheme();
   jobs = new Map((await window.api.listJobs()).map((j) => [j.id, j]));
 
-  for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item')) {
+  for (const b of document.querySelectorAll<HTMLButtonElement>('.nav-item[data-nav]')) {
     b.addEventListener('click', () => show(b.dataset.nav as View));
   }
+  setupNavToggle();
   setupDetail(() => show(previousView));
   setupGlossary();
   setupDrop();

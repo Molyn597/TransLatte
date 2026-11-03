@@ -54,7 +54,13 @@ export const ICONS = {
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />',
   list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6" />',
+  minus: '<path d="M5 12h14" />',
+  plus: '<path d="M12 5v14M5 12h14" />',
+  fit: '<path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" />',
+  collapse: '<path d="M13 6l6 6-6 6M5 6l6 6-6 6" />',
 };
+
+export const cleanError = (e: unknown) => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 export const MODES: Record<Mode, { title: MessageKey; desc: MessageKey }> = {
   fast: { title: 'mode.fast.title', desc: 'mode.fast.desc' },

@@ -179,7 +179,7 @@ interface ChatResponse {
 export async function chat(
   endpoint: Endpoint,
   model: string,
-  messages: { role: 'system' | 'user'; content: ChatContent }[],
+  messages: { role: 'system' | 'user' | 'assistant'; content: ChatContent }[],
   opts: { maxTokens: number; temperature?: number; signal?: AbortSignal; onCost?: (usd: number) => void },
 ) {
   const data = await post<ChatResponse>(

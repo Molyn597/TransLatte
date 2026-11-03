@@ -18,6 +18,7 @@ import { languageName } from '../shared/languages';
 import { findRegion, normalizeCrop } from '../shared/regions';
 import type { GlossaryEntry, Job, JobOptions, Mode, OutputKind, Provider, RegionTranslation, Settings, Stage } from '../shared/types';
 import { isOnline } from '../shared/provider';
+import { askDocument } from './chat';
 import { fileInfo } from './fileinfo';
 import { usdCzk } from './fx';
 import { clearKey, readKey, saveKey } from './keystore';
@@ -277,6 +278,15 @@ function registerIpc() {
     send('job-update', job);
     return region;
   });
+  ipcMain.handle('job-chat', (_e, id: string) => store.chat(id));
+  ipcMain.handle('job-chat-ask', async (_e, id: string, question: string) => {
+    const job = await store.job(id);
+    if (!job) throw new Error(t('study.noJob'));
+    const answer = await queue.exclusive(async () => askDocument(store, job, await store.settings(), question));
+    send('job-update', job);
+    return answer;
+  });
+  ipcMain.handle('job-chat-clear', (_e, id: string) => store.saveChat(id, []));
   ipcMain.handle('job-delete', async (_e, id: string) => {
     await queue.remove(id);
     send('job-removed', id);

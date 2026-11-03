@@ -67,6 +67,17 @@ export interface Segment {
   links?: SegmentLink[];
 }
 
+/** Zpráva chatu s dokumentem. */
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  /** Segmenty (id), ze kterých odpověď vychází; čísla citací [n] v textu. */
+  sources?: number[];
+  /** Odpověď z celého dokumentu (vešel se do kontextu), jinak z vyhledaných úseků. */
+  whole?: boolean;
+  at: number;
+}
+
 export interface FigureSnapshot {
   /** Cesta relativně ke složce úlohy, např. figures/12.png. */
   file: string;
@@ -288,6 +299,10 @@ export interface Api {
   translateSegments(id: string, ids: number[]): Promise<void>;
   jobRegions(id: string): Promise<RegionTranslation[]>;
   translateRegion(id: string, page: number, crop: RegionTranslation['crop']): Promise<RegionTranslation>;
+  jobChat(id: string): Promise<ChatMessage[]>;
+  /** Odpověď na dotaz k dokumentu; otázka i odpověď se uloží do historie. */
+  askDocument(id: string, question: string): Promise<ChatMessage>;
+  clearChat(id: string): Promise<void>;
   deleteJob(id: string): Promise<void>;
   openOutput(id: string, kind?: OutputKind): Promise<void>;
   revealOutput(id: string): Promise<void>;

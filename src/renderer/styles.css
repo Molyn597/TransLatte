@@ -284,6 +284,115 @@ body::before {
   margin-top: auto;
 }
 
+/* Tlačítka panelů v horní liště okna (jako v Claudovi): vlevo navigace, vpravo chat. */
+.bar-btn {
+  position: fixed;
+  top: 6px;
+  z-index: 30;
+  width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  -webkit-app-region: no-drag;
+}
+
+.bar-btn[hidden] {
+  display: none;
+}
+
+.bar-btn:hover {
+  background: var(--pill);
+  color: var(--text);
+}
+
+.bar-btn.active {
+  color: var(--text);
+}
+
+.bar-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Vlevo za semafory macOS, na Windows u levého okraje. */
+.bar-left {
+  left: 12px;
+}
+
+.platform-darwin .bar-left {
+  top: 8px;
+  left: 84px;
+}
+
+.bar-right {
+  right: 16px;
+}
+
+/* Na Windows je vpravo nahoře překryv s tlačítky okna (~140 px). */
+.platform-win32 .bar-right {
+  right: 150px;
+}
+
+.platform-win32 .app {
+  padding-top: 40px;
+}
+
+.platform-darwin .bar-right {
+  top: 8px;
+}
+
+/* Sbalený levý panel: jen ikony, popisky v tooltipu. */
+.nav-collapsed .sidebar {
+  width: 64px;
+}
+
+.nav-collapsed .brand-pill {
+  position: relative;
+  justify-content: center;
+  padding: 6px;
+}
+
+.nav-collapsed .brand-name,
+.nav-collapsed .lm-card {
+  display: none;
+}
+
+.nav-collapsed .status-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 18px;
+  height: 18px;
+  background: var(--panel);
+}
+
+.nav-collapsed .nav-panel {
+  padding: 8px 6px;
+}
+
+.nav-collapsed .nav-item {
+  position: relative;
+  justify-content: center;
+  padding: 10px 0;
+}
+
+.nav-collapsed .nav-item > span:not(.nav-badge) {
+  display: none;
+}
+
+.nav-collapsed .nav-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+
 .lm-head {
   display: flex;
   align-items: center;
@@ -764,6 +873,264 @@ input:focus {
 
 /* Detail */
 
+.tabs-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#chat-toggle.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Chat s dokumentem: vlastní sloupec okna vedle obsahu, posouvá se jen seznam zpráv. */
+.chat-panel {
+  position: relative;
+  flex: none;
+  width: var(--chat-width, 400px);
+  min-width: 300px;
+  max-width: 50vw;
+}
+
+.chat-panel[hidden] {
+  display: none;
+}
+
+.chat-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+/* Zasunutý chat: úzká lišta u pravého okraje okna. */
+.chat-rail {
+  flex: none;
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0;
+  color: var(--muted);
+}
+
+.chat-rail[hidden] {
+  display: none;
+}
+
+.chat-rail:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.chat-rail svg {
+  width: 20px;
+  height: 20px;
+}
+
+.chat-rail span {
+  writing-mode: vertical-rl;
+  font-weight: 600;
+}
+
+.chat-panel.closing {
+  opacity: 0.5;
+}
+
+/* Úchyt pro změnu šířky na levém okraji panelu. */
+.chat-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -12px;
+  width: 12px;
+  cursor: col-resize;
+}
+
+.chat-resize:hover,
+.chat-resize.dragging {
+  background: linear-gradient(to right, transparent 5px, var(--accent) 5px, var(--accent) 7px, transparent 7px);
+}
+
+@media (max-width: 1000px) {
+  .chat-panel {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    bottom: 16px;
+    z-index: 20;
+    width: min(400px, calc(100vw - 32px));
+    max-width: none;
+  }
+
+  .platform-darwin .chat-panel {
+    top: 40px;
+  }
+
+  .chat-resize {
+    display: none;
+  }
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-head strong {
+  flex: 1;
+}
+
+.chat-head .btn {
+  padding: 6px 10px;
+}
+
+.chat-messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.chat-intro {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-intro p {
+  margin: 0 0 6px;
+}
+
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 92%;
+}
+
+.chat-msg.user {
+  align-self: flex-end;
+}
+
+.chat-text {
+  padding: 9px 13px;
+  border-radius: 14px;
+  background: var(--pill);
+  border: 1px solid var(--line);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-msg.user .chat-text {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: transparent;
+}
+
+.chat-note {
+  padding-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-wait {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.chat-wait-note {
+  font-size: 11px;
+}
+
+.cite-chip {
+  display: inline-block;
+  min-width: 18px;
+  margin: 0 1px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11px;
+  line-height: 17px;
+  vertical-align: 1px;
+}
+
+.cite-chip:hover {
+  border-color: var(--accent);
+}
+
+.chat-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px 0;
+}
+
+.chat-quick .btn {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.chat-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 14px 14px;
+}
+
+.chat-form textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--pill);
+}
+
+/* Zvýraznění citace v dokumentu */
+.cite-hl {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--accent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  pointer-events: none;
+}
+
+.compare-cell.cite-row {
+  background: color-mix(in srgb, var(--accent) 22%, var(--pill));
+}
+
+:root[data-theme='mono'] .cite-hl {
+  border: 2px solid #000;
+  background: rgb(0 0 0 / 15%);
+}
+
+:root[data-theme='mono'] .cite-chip {
+  border-color: #000;
+  background: #fff;
+}
+
+.pdf-page.plain {
+  cursor: default;
+}
+
+
 .detail-head {
   display: flex;
   flex-wrap: wrap;
@@ -940,28 +1307,39 @@ input:focus {
 .pdf-pages {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
+  /* Při přiblížení se posouvá jen kontejner stránek; padding kvůli stínu a plovoucímu ovladači. */
+  overflow-x: auto;
+  overflow-anchor: none;
+  padding: 4px 4px 72px;
 }
 
-.pdf-pairs {
-  align-items: stretch;
+/* Auto okraje místo align-items: center, ať se široký obsah dá celý doscrollovat. */
+.pdf-pages > .pdf-page,
+.pdf-pages > .pdf-pair {
+  margin-inline: auto;
+}
+
+.pdf-pages > p {
+  align-self: center;
 }
 
 .pdf-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 14px;
-  align-items: start;
+  align-items: flex-start;
 }
 
 .pdf-pairs.stacked .pdf-pair {
-  grid-template-columns: 1fr;
-  justify-items: center;
+  flex-direction: column;
+}
+
+.pdf-pairs.stacked .pdf-spacer {
+  display: none;
 }
 
 .pdf-pages canvas {
-  max-width: 100%;
   border-radius: 6px;
   box-shadow: var(--shadow);
   background: #fff;
@@ -1145,7 +1523,6 @@ input:focus {
 
 .pdf-page {
   position: relative;
-  max-width: 100%;
   line-height: 0;
   cursor: crosshair;
   user-select: none;
@@ -2084,4 +2461,76 @@ input:focus {
   .welcome-tiles {
     grid-template-columns: 1fr;
   }
+}
+
+.zoom-dock {
+  position: sticky;
+  bottom: 12px;
+  height: 0;
+  display: flex;
+  justify-content: center;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.zoom-dock[hidden] {
+  display: none;
+}
+
+.zoom-pill {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.zoom-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.zoom-btn:hover,
+.zoom-btn.on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.zoom-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.zoom-slider {
+  width: 120px;
+  accent-color: var(--accent);
+}
+
+.zoom-value {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }

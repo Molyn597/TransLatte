@@ -109,3 +109,19 @@ export function contextPrompt(sample: string, target: string) {
     `\n\nDOCUMENT:\n${sample}`
   );
 }
+
+/** Klíčová slova pro hledání v dokumentu v obou jazycích (dotaz česky na anglický originál). */
+export const searchTermsPrompt = (question: string, source: string, target: string) =>
+  `A user asks about a document written in ${englishName(source)} and translated into ${englishName(target)}.\n` +
+  `Question: ${question}\n\n` +
+  `Write 10–20 search keywords and short phrases that passages answering this question would contain, ` +
+  `in both ${englishName(source)} and ${englishName(target)}, including synonyms and related technical terms. ` +
+  'Output only the keywords separated by commas.';
+
+export const DOCUMENT_CHAT_SYSTEM =
+  'You answer questions about one document using only the numbered passages below (p. = page). Rules:\n' +
+  '- Use only information from the passages, never outside knowledge. If they do not contain the answer, say so in one sentence.\n' +
+  '- After each sentence based on a passage, cite it by its number in square brackets, e.g. [12]; several as [12][15]. ' +
+  'Cite only numbers that appear below.\n' +
+  '- Answer in the language of the question, concisely and in your own words; quote only short phrases.\n' +
+  '- For a summary, cover the main points in the order of the document.\n\nPassages:\n';

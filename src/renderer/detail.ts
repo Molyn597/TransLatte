@@ -6,7 +6,10 @@ import { PDFJS_OPTIONS } from '../shared/pdf';
 import { isOnline } from '../shared/provider';
 import { findRegion, normalizeCrop } from '../shared/regions';
 import type { DocumentContext, Job, JobDetail, Mode, RegionTranslation, Segment, Stage } from '../shared/types';
+import { resetChat, setupChat, showChat } from './chat';
+import { createPages, releasePages, setupPdfZoom } from './pdf-zoom';
 import {
+  cleanError,
   date,
   duration,
   h,
@@ -32,7 +35,6 @@ const finalText = (s: Segment) => s.edited ?? s.polished ?? s.translation ?? '';
 const visible = (segments: Segment[]) => segments.filter((s) => !s.layoutOnly);
 const pickable = (segments: Segment[]) => segments.filter((s) => !s.layoutOnly && !s.figure);
 const isPicking = () => current?.job.status === 'picking' || picking;
-const cleanError = (e: unknown) => (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 const GENDER: Record<DocumentContext['authorGender'], MessageKey> = {
   female: 'detail.gender.female',
   male: 'detail.gender.male',
@@ -50,6 +52,12 @@ let picked = new Set<number>();
 let regions: RegionTranslation[] = [];
 // Vrstvy stránek originálu podle čísla stránky, aby šel přidat rámeček bez překreslení.
 let regionLayers = new Map<number, HTMLElement[]>();
+// Všechny vykreslené stránky (originál i překlad) podle čísla; na ně se kreslí zvýraznění citace.
+let pageWraps = new Map<number, HTMLElement[]>();
+// Záložka, jejíž obsah je v těle vykreslený hotový.
+let renderedTab: Tab | null = null;
+// Citovaný odstavec z chatu; zvýrazní se, jakmile je obsah záložky vykreslený.
+let cite: { segment: Segment; scrolled: boolean } | null = null;
 
 export const detailJobId = () => current?.job.id ?? null;
 const pdfTabs = () => document.querySelectorAll<HTMLButtonElement>('#detail-tabs .tab[data-pdf]');
@@ -221,8 +229,8 @@ function compareView(segments: Segment[]) {
     const figure = s.snapshot ? h('div', { class: 'compare-figure' }, figureEl(s)) : null;
     if (figure && s.snapshot?.position === 'before') grid.append(figure);
     grid.append(
-      h('div', { class: cls }, s.source),
-      h('div', { class: cls }, s.skipped ? t('detail.skipped') : finalText(s) || '…', s.warning ? h('span', { class: 'warning-note' }, `⚠ ${s.warning}`) : null),
+      h('div', { class: cls, 'data-seg': String(s.id) }, s.source),
+      h('div', { class: cls, 'data-seg': String(s.id) }, s.skipped ? t('detail.skipped') : finalText(s) || '…', s.warning ? h('span', { class: 'warning-note' }, `⚠ ${s.warning}`) : null),
     );
     if (figure && s.snapshot?.position !== 'before') grid.append(figure);
   }
@@ -420,6 +428,7 @@ const MIN_DRAG = 12;
 function selectablePage(pdf: PDFDocumentProxy, number: number, canvas: HTMLCanvasElement) {
   const wrap = h('div', { class: 'pdf-page' }, canvas);
   wrap.style.width = canvas.style.width;
+  pageWraps.set(number, [...(pageWraps.get(number) ?? []), wrap]);
   regionLayers.set(number, [...(regionLayers.get(number) ?? []), wrap]);
   for (const region of regions) if (region.page === number) addRegionFrame(pdf, region);
   wrap.onmousedown = (e) => {
@@ -483,16 +492,57 @@ async function originalView(detail: JobDetail, token: number) {
   return pdfView(await window.api.readInput(detail.job.id), token, true);
 }
 
-async function pdfCanvas(pdf: PDFDocumentProxy, number: number, width: number) {
-  const page = await pdf.getPage(number);
-  const base = page.getViewport({ scale: 1 });
-  const viewport = page.getViewport({ scale: (width / base.width) * window.devicePixelRatio });
-  const canvas = h('canvas');
-  canvas.width = Math.ceil(viewport.width);
-  canvas.height = Math.ceil(viewport.height);
-  canvas.style.width = `${width}px`;
-  await page.render({ canvas, viewport }).promise;
-  return canvas;
+/** Stránka bez výběru oblastí (překlad), ale se stejnou vrstvou pro zvýraznění. */
+function plainPage(number: number, canvas: HTMLCanvasElement) {
+  const wrap = h('div', { class: 'pdf-page plain' }, canvas);
+  wrap.style.width = canvas.style.width;
+  pageWraps.set(number, [...(pageWraps.get(number) ?? []), wrap]);
+  return wrap;
+}
+
+/** Zvýrazní citovaný segment na vykreslených stránkách (PDF) nebo v řádku Srovnání. */
+function applyCite() {
+  if (!cite) return;
+  const { segment } = cite;
+  const first: HTMLElement[] = [];
+  if (tab === 'compare') {
+    for (const el of $('detail-body').querySelectorAll<HTMLElement>(`[data-seg="${segment.id}"]`)) {
+      el.classList.add('cite-row');
+      first.push(el);
+    }
+  } else {
+    for (const rect of segment.rects ?? []) {
+      for (const wrap of pageWraps.get(rect.page) ?? []) {
+        const { pw, ph } = (wrap.firstElementChild as HTMLElement).dataset;
+        if (!pw || !ph) continue;
+        const mark = h('div', { class: 'cite-hl' });
+        placeBox(mark, [rect.x / +pw, rect.y / +ph, (rect.x + rect.w) / +pw, (rect.y + rect.h) / +ph]);
+        wrap.append(mark);
+        first.push(mark);
+      }
+    }
+  }
+  if (cite.scrolled || !first.length) return;
+  cite.scrolled = true;
+  first[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+function clearCite() {
+  cite = null;
+  for (const el of document.querySelectorAll('.cite-hl')) el.remove();
+  for (const el of document.querySelectorAll('.cite-row')) el.classList.remove('cite-row');
+}
+
+/** Klik na citaci v chatu: přepne na vhodnou záložku (hotová se nepřekresluje) a zvýrazní segment. */
+function showCite(segment: Segment) {
+  if (!current) return;
+  clearCite();
+  cite = { segment, scrolled: false };
+  const { job } = current;
+  const next: Tab = job.ext.toLowerCase() !== '.pdf' ? 'compare' : job.outputPdf ? 'side-by-side' : 'original';
+  if (next === tab) return renderedTab === tab ? applyCite() : undefined;
+  tab = next;
+  void renderBody();
 }
 
 const regionHint = () => h('p', { class: 'muted region-hint' }, t('region.hint'));
@@ -501,14 +551,13 @@ async function pdfView(data: Uint8Array | null, token: number, selectable = fals
   const holder = h('div', { class: 'pdf-pages' }, h('p', { class: 'muted' }, t('detail.loadingPdf')));
   if (!data || token !== renderToken) return holder;
   const pdf = await getDocument({ data, ...PDFJS_OPTIONS }).promise;
+  if (token !== renderToken) return holder;
   holder.replaceChildren();
   if (selectable) holder.append(regionHint());
-  const width = Math.min(900, $('detail-body').clientWidth || 800);
-  for (let p = 1; p <= pdf.numPages; p++) {
-    if (token !== renderToken) break;
-    const canvas = await pdfCanvas(pdf, p, width);
-    holder.append(selectable ? selectablePage(pdf, p, canvas) : canvas);
-  }
+  const pages = createPages(holder, () => Math.min(900, $('detail-body').clientWidth || 800));
+  const canvases = await Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pages.canvas(pdf, i + 1)));
+  if (token !== renderToken) return pages.destroy(), holder;
+  canvases.forEach((canvas, i) => holder.append(selectable ? selectablePage(pdf, i + 1, canvas) : plainPage(i + 1, canvas)));
   return holder;
 }
 
@@ -518,18 +567,23 @@ async function sideBySideView(detail: JobDetail, token: number) {
   const [source, output] = await Promise.all([window.api.readInput(detail.job.id), window.api.readOutputPdf(detail.job.id)]);
   if (!source || !output || token !== renderToken) return holder;
   const [left, right] = await Promise.all([getDocument({ data: source, ...PDFJS_OPTIONS }).promise, getDocument({ data: output, ...PDFJS_OPTIONS }).promise]);
-  const available = $('detail-body').clientWidth || 800;
-  const stacked = available < SIDE_BY_SIDE_MIN;
-  const width = stacked ? Math.min(900, available) : Math.floor((available - PAIR_GAP) / 2);
-  holder.classList.toggle('stacked', stacked);
+  if (token !== renderToken) return holder;
   holder.append(regionHint());
-  for (let p = 1; p <= Math.max(left.numPages, right.numPages); p++) {
-    if (token !== renderToken) break;
-    const pair = h('div', { class: 'pdf-pair' });
-    holder.append(pair);
-    const cells = await Promise.all([p <= left.numPages ? pdfCanvas(left, p, width) : null, p <= right.numPages ? pdfCanvas(right, p, width) : null]);
-    pair.append(cells[0] ? selectablePage(left, p, cells[0]) : h('div'), cells[1] ?? h('div'));
-  }
+  // Základní šířka stránky; podle šířky těla zároveň přepíná řazení pod sebe.
+  const pages = createPages(holder, () => {
+    const available = $('detail-body').clientWidth || 800;
+    const stacked = available < SIDE_BY_SIDE_MIN;
+    holder.classList.toggle('stacked', stacked);
+    return stacked ? Math.min(900, available) : Math.floor((available - PAIR_GAP) / 2);
+  });
+  const count = Math.max(left.numPages, right.numPages);
+  const cells = await Promise.all(
+    Array.from({ length: count }, (_, i) => Promise.all([i < left.numPages ? pages.canvas(left, i + 1) : null, i < right.numPages ? pages.canvas(right, i + 1) : null])),
+  );
+  if (token !== renderToken) return pages.destroy(), holder;
+  cells.forEach(([a, b], i) => {
+    holder.append(h('div', { class: 'pdf-pair' }, a ? selectablePage(left, i + 1, a) : pages.spacer(), b ? plainPage(i + 1, b) : pages.spacer()));
+  });
   return holder;
 }
 
@@ -589,6 +643,8 @@ function infoView(detail: JobDetail) {
 async function renderBody() {
   if (!current) return;
   const token = ++renderToken;
+  renderedTab = null;
+  releasePages();
   const body = $('detail-body');
   for (const b of document.querySelectorAll<HTMLButtonElement>('#detail-tabs .tab')) {
     b.classList.toggle('active', b.dataset.tab === tab);
@@ -598,6 +654,7 @@ async function renderBody() {
   if (tab === 'original' || tab === 'translated-pdf' || tab === 'side-by-side') {
     body.replaceChildren(h('p', { class: 'muted' }, t('detail.loading')));
     regionLayers = new Map();
+    pageWraps = new Map();
     regions = job.ext.toLowerCase() === '.pdf' && tab !== 'translated-pdf' ? await window.api.jobRegions(job.id).catch(() => []) : [];
     try {
       const view =
@@ -606,7 +663,11 @@ async function renderBody() {
           : tab === 'side-by-side'
             ? await sideBySideView(current, token)
             : await pdfView(await window.api.readOutputPdf(job.id), token);
-      if (token === renderToken) body.replaceChildren(view);
+      if (token === renderToken) {
+        body.replaceChildren(view);
+        renderedTab = tab;
+        applyCite();
+      }
     } catch (e) {
       const what = tab === 'original' ? 'detail.tab.original' : tab === 'side-by-side' ? 'detail.tab.sideBySide' : 'detail.translatedPdf';
       if (token === renderToken) body.replaceChildren(h('div', { class: 'error-box' }, t('detail.cannotShow', { what: t(what), error: (e as Error).message })));
@@ -620,9 +681,13 @@ async function renderBody() {
   }
   if (tab === 'compare' && isPicking()) {
     if (job.status === 'picking' && !picking) startPicking();
-    return body.replaceChildren(pickView(segments));
+    body.replaceChildren(pickView(segments));
+    renderedTab = tab;
+    return;
   }
   body.replaceChildren(tab === 'compare' ? compareView(visible(segments)) : documentView(visible(segments).filter((s) => !s.skipped), finalText));
+  renderedTab = tab;
+  applyCite();
 }
 
 function renderHeader() {
@@ -640,6 +705,8 @@ export async function openDetail(id: string, initialTab: Tab = 'compare') {
   const detail = await window.api.getJob(id);
   if (!detail) return false;
   current = detail;
+  clearCite();
+  showChat(detail.job);
   tab = initialTab;
   picking = false;
   renderHeader();
@@ -669,12 +736,15 @@ export async function updateDetail(job: Job) {
 }
 
 export function setupDetail(onBack: () => void) {
+  setupChat({ segments: () => current?.segments ?? [], cite: showCite });
+  setupPdfZoom();
   $('detail-back').addEventListener('click', onBack);
   document.addEventListener('click', () => {
     for (const m of document.querySelectorAll<HTMLElement>('.menu')) m.hidden = true;
   });
   for (const b of document.querySelectorAll<HTMLButtonElement>('#detail-tabs .tab')) {
     b.addEventListener('click', () => {
+      clearCite();
       tab = b.dataset.tab as Tab;
       void renderBody();
     });
@@ -684,4 +754,7 @@ export function setupDetail(onBack: () => void) {
 export function closeDetail() {
   current = null;
   renderToken++;
+  releasePages();
+  clearCite();
+  resetChat();
 }

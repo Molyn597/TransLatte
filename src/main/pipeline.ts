@@ -75,7 +75,7 @@ const OCR_MATCH = 0.85;
 const ID = { ocr: 'translatte-ocr', translate: 'translatte-translate', polish: 'translatte-polish' };
 
 type Role = keyof Models;
-type Llm = Pick<JobContext, 'job' | 'settings' | 'signal' | 'endpoint'>;
+export type Llm = Pick<JobContext, 'job' | 'settings' | 'signal' | 'endpoint'>;
 
 /** Lokálně se model volá načteným identifikátorem, online jeho id z katalogu. */
 const modelName = (settings: Settings, role: Role) => (isOnline(settings) ? settings.remoteModels[role] : ID[role]);
@@ -83,11 +83,11 @@ const modelName = (settings: Settings, role: Role) => (isOnline(settings) ? sett
 const addCost = (job: Job, usd: number) => (job.cost = (job.cost ?? 0) + usd);
 
 /** Dotaz na model role; cena z online odpovědi se přičte k úloze. */
-const ask = (ctx: Llm, role: Role, messages: { role: 'system' | 'user'; content: ChatContent }[], maxTokens: number) =>
+export const ask = (ctx: Llm, role: Role, messages: { role: 'system' | 'user' | 'assistant'; content: ChatContent }[], maxTokens: number) =>
   chat(ctx.endpoint!, modelName(ctx.settings, role), messages, { maxTokens, signal: ctx.signal, onCost: (usd) => addCost(ctx.job, usd) });
 
 // Online poskytovatel nic nenačítá ani neuvolňuje, modely jsou vždy k dispozici.
-const loadModel = async (ctx: Llm, role: Role) => {
+export const loadModel = async (ctx: Llm, role: Role) => {
   if (!isOnline(ctx.settings)) await ensureModel(ctx.settings.models[role], ID[role]);
 };
 
@@ -102,7 +102,7 @@ async function estimateJobCost(job: Job, settings: Settings, chars: number, ocrP
 }
 
 /** Lokálně rozjede server, online ověří, že je uložený klíč. */
-async function connect(settings: Settings, root: string): Promise<Endpoint> {
+export async function connect(settings: Settings, root: string): Promise<Endpoint> {
   if (isOnline(settings)) return resolveEndpoint(settings, await readKey(root));
   await ensureServer(settings.apiUrl);
   return resolveEndpoint(settings);
