@@ -26,7 +26,7 @@ import { status } from './lmstudio';
 import { openrouterStatus, refreshCatalog } from './provider';
 import { relayoutJob, translateRegion } from './pipeline';
 import { Queue, SUPPORTED } from './queue';
-import { checkUpdate } from './updates';
+import { checkUpdate, downloadUpdate } from './updates';
 import { Store } from './store';
 
 const isMac = process.platform === 'darwin';
@@ -224,6 +224,8 @@ function registerIpc() {
   ipcMain.handle('usd-czk', () => usdCzk(store));
   ipcMain.handle('app-version', () => app.getVersion());
   ipcMain.handle('update-check', (_e, auto?: boolean) => checkUpdate(store, Boolean(auto)));
+  ipcMain.handle('update-download', () => downloadUpdate((received, total) => send('update-progress', { received, total })));
+  ipcMain.handle('app-quit', () => app.quit());
   ipcMain.handle('open-url', async (_e, url: string) => {
     if (typeof url === 'string' && url.startsWith('https://github.com/')) await shell.openExternal(url);
   });

@@ -1,5 +1,6 @@
 import { getLang, t, type MessageKey } from '../shared/i18n';
 import { helpSections, type HelpTopic } from '../shared/help';
+import { updateCard } from './update';
 import { toast, h } from './dom';
 
 /** Obsah sekce „Nápověda“: odkazy na kapitoly a kapitoly samotné (text je z shared/help.ts). */
@@ -28,18 +29,21 @@ function aboutActions(onWelcome: () => void) {
   const version = h('p', { class: 'muted' }, t('help.version', { version: '…' }));
   void window.api.appVersion().then((v) => (version.textContent = t('help.version', { version: v })));
   const check = h('button', { class: 'btn' }, t('help.checkUpdate'));
+  const found = h('div', {});
   check.addEventListener('click', async () => {
     check.disabled = true;
+    found.replaceChildren();
     try {
       const r = await window.api.checkUpdate();
-      toast(!r.ok ? t('update.failed') : r.newer ? t('update.available', { version: r.latest!.version }) : t('update.latest'), !r.ok);
+      if (r.ok && r.newer && r.latest) found.append(updateCard(r.latest));
+      else toast(!r.ok ? t('update.failed') : t('update.latest'), !r.ok);
     } catch {
       toast(t('update.failed'), true);
     } finally {
       check.disabled = false;
     }
   });
-  return h('div', {}, version, h('div', { class: 'help-actions' }, check, h('button', { class: 'btn', onclick: onWelcome }, t('help.showWelcome'))));
+  return h('div', {}, version, h('div', { class: 'help-actions' }, check, h('button', { class: 'btn', onclick: onWelcome }, t('help.showWelcome'))), found);
 }
 
 export function scrollToTopic(topic: HelpTopic) {

@@ -23,6 +23,7 @@ import {
   STATUS_TEXT,
   toast,
 } from './dom';
+import { updateCard } from './update';
 import { fillHelpDots, renderHelp, scrollToTopic } from './help-view';
 import { openWelcome } from './welcome';
 import type { HelpTopic } from '../shared/help';
@@ -94,11 +95,9 @@ function showWelcome() {
 async function checkUpdates() {
   const r = await window.api.checkUpdate(true).catch(() => null);
   if (!r?.newer || !r.latest) return;
-  const { version, url } = r.latest;
-  $('update-text').textContent = t('update.available', { version });
-  $('update-download').onclick = () => void window.api.openUrl(url);
-  $('update-dismiss').onclick = () => ($('update-bar').hidden = true);
-  $('update-bar').hidden = false;
+  const bar = $('update-bar');
+  bar.replaceChildren(updateCard(r.latest, () => (bar.hidden = true)));
+  bar.hidden = false;
 }
 
 async function openJob(id: string) {

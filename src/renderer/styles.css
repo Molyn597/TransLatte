@@ -505,18 +505,50 @@ body::before {
 }
 
 .update-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   margin: 16px 28px 0;
-  padding: 8px 10px 8px 14px;
+}
+
+.update-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px;
   border-radius: 8px;
   background: var(--accent-soft);
 }
 
-.update-bar span {
-  flex: 1;
-  font-weight: 600;
+.help .update-card {
+  margin-top: 12px;
+}
+
+.update-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.update-notes {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.update-msg {
+  margin: 0;
+}
+
+.update-msg.error {
+  color: var(--danger-text);
+}
+
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 /* ---------- Tlačítka a pole ---------- */

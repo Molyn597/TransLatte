@@ -251,13 +251,28 @@ export interface Settings {
   lastUpdateCheck?: number;
 }
 
+export interface UpdateAsset {
+  name: string;
+  url: string;
+  size: number;
+}
+
 export interface UpdateCheck {
   current: string;
-  latest?: { version: string; url: string };
+  /** `notes`: popis vydání (prostý text, zkrácený). */
+  latest?: { version: string; url: string; notes: string };
   newer: boolean;
   /** Podařilo se zjistit nejnovější verzi. */
   ok: boolean;
 }
+
+export interface UpdateProgress {
+  received: number;
+  total: number;
+}
+
+/** Výsledek stažení aktualizace: `windows` = instalátor se spustil a aplikace se ukončí, `mac` = otevřen DMG, nahrazení udělá uživatel. */
+export type UpdateResult = { ok: true; platform: 'windows' | 'mac' } | { ok: false; error: string; url?: string };
 
 export interface LmStatus {
   /** Bez hodnoty = lokální. */
@@ -308,6 +323,10 @@ export interface Api {
   appVersion(): Promise<string>;
   /** `auto`: automatická kontrola, nejvýš jednou denně. */
   checkUpdate(auto?: boolean): Promise<UpdateCheck>;
+  /** Stáhne instalátor nejnovější verze do Stažených a spustí ho (průběh přes onUpdateProgress). */
+  downloadUpdate(): Promise<UpdateResult>;
+  quitApp(): Promise<void>;
+  onUpdateProgress(handler: (p: UpdateProgress) => void): void;
   /** Otevře v prohlížeči jen adresy na github.com. */
   openUrl(url: string): Promise<void>;
   pickFiles(): Promise<string[]>;
